@@ -1,0 +1,3 @@
+{"type":"assistant","uuid":"e1","parentUuid":null,"sessionId":"sess-aaaa","timestamp":"2026-10-01T12:00:00.000Z","version":"9.9.9","isSidechain":false,"isApiErrorMessage":true,"message":{"id":"synth_1","model":"<synthetic>","role":"assistant","content":[{"type":"text","text":"SECRET_TEXT_X"}],"stop_reason":"stop_sequence","usage":{"input_tokens":0,"output_tokens":0}}}
+{"type":"system","subtype":"api_error","uuid":"e2","sessionId":"sess-aaaa","timestamp":"2026-10-01T12:00:01.000Z","version":"9.9.9","content":"SECRET_TEXT_X"}
+{"type":"system","subtype":"stop_hook_summary","uuid":"e3","sessionId":"sess-aaaa","timestamp":"2026-10-01T12:00:02.000Z"}

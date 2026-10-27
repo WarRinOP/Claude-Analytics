@@ -1,0 +1,203 @@
+/*
+  Design tokens for the ledger. Dark first (warm graphite tinted toward terracotta), light by prefers-color-scheme or the
+  toggle. The theme attribute on <html> is "system", "dark" or "light".
+
+  Rules that keep the system quiet:
+  - Terracotta (--accent) has three jobs only: the focus ring, the selected range, and the top step of the activity ramp (the heatmap and its legend).
+    It is never a data series colour.
+  - Status colours (--good, --warn, --bad) always travel with words and a distinct shape, never alone.
+  - Series colours are the dataviz categorical method with orange and red left out, so nothing can be mistaken for the accent.
+    Validated with the dataviz validate_palette.js, adjacent pairs, against --panel (#fdfbf9 light, #1f1b18 dark):
+      models (6 slots):  light and dark pass lightness, chroma, CVD (worst 16.3 light, 13.0 dark) and normal vision (19.6, 19.3).
+      token kinds (4):   light and dark pass the same checks (CVD worst 17.6, 13.0; normal vision 28.1, 19.7).
+    Light mode aqua, yellow and magenta sit under 3:1 on the panel (the documented relief case): they are always paired with
+    text: the token table under the meter, and the legends, tooltips and table views of the charts.
+
+  Activity ramp (the heatmap): one sequential ramp from the ground to the accent. Step 0 is the ground ("no activity"), step 4 is
+    the accent, steps 1 to 3 are the OKLab path between them, with the first step lifted so a quiet day still reads against
+    the panel. Validated with validate_palette.js --ordinal against --panel on the four non zero steps:
+      dark  #6c4537 #935742 #b8684d #da7756   monotone L, every gap at least 0.06, step 1 at 2.07:1, one hue (spread 1 degree)
+      light #daa692 #cf866b #c36847 #b74b21   monotone L, every gap at least 0.06, step 1 at 2.07:1, one hue (spread 2 degrees)
+    Step 0 is meant to recede (1.13:1 dark, 1.17:1 light), the documented sequential case: every cell value is also in the
+    tooltip and the table view.
+*/
+
+:root {
+  color-scheme: dark;
+
+  /* ground ramp: page, panel, raised (popovers, hover), sunk (inputs, meter track) */
+  --ground: #151210;
+  --panel: #1f1b18;
+  --raised: #2a2522;
+  --sunk: #0d0a09;
+
+  /* nested bands of the usage ledger: the panel one and two steps toward the sunk ground (a day inside a month, a model line) */
+  --band-1: #191613;
+  --band-2: #14100f;
+
+  --line: rgb(255 255 255 / 0.09);
+  --line-strong: rgb(255 255 255 / 0.17);
+
+  --ink: #f2f0ec;
+  --ink-2: #c1bdb8;
+  --ink-3: #9c9793;
+
+  --accent: #da7756;
+  --accent-ink: #110c09;
+  --focus: #da7756;
+  --selection: rgb(218 119 86 / 0.35);
+  --shadow-pop: 0 10px 30px rgb(0 0 0 / 0.45);
+
+  /* status: the shape is drawn in this colour, the words stay in ink */
+  --good: #0ca30c;
+  --warn: #fab219;
+  --bad: #d03b3b;
+
+  /* categorical series, fixed order, never cycled. Models take slots 1 to 6 in this order. */
+  --series-1: #3987e5; /* blue */
+  --series-2: #199e70; /* aqua */
+  --series-3: #9085e9; /* violet */
+  --series-4: #c98500; /* yellow */
+  --series-5: #d55181; /* magenta */
+  --series-6: #008300; /* green */
+  --series-other: #898781;
+
+  /* token kinds in the composition meter: input, output, cache write, cache read (a sequence validated on its own) */
+  --tok-input: var(--series-1);
+  --tok-output: var(--series-6);
+  --tok-write: var(--series-5);
+  --tok-read: var(--series-3);
+
+  /* activity ramp, step 0 (no activity) to step 4 (the accent) */
+  --heat-0: #2a2522;
+  --heat-1: #6c4537;
+  --heat-2: #935742;
+  --heat-3: #b8684d;
+  --heat-4: #da7756;
+
+  /* retention horizon hatch: the coverage note (CSS gradient) and the heatmap and daily chart (SVG pattern, same angle) */
+  --hatch: repeating-linear-gradient(135deg, var(--line-strong) 0 1px, transparent 1px 5px);
+  --hatch-line: rgb(255 255 255 / 0.3);
+
+  /* possibly incomplete days: a fine stipple of dots, lighter than the unknown days' hatch of lines. The first colour is for dots
+     drawn over a coloured cell, the second for the band that sits on the plain panel behind the daily bars. */
+  --partial-line: rgb(255 255 255 / 0.5);
+  --partial-band: rgb(255 255 255 / 0.3);
+  --partial: radial-gradient(circle, var(--partial-line) 0.8px, transparent 1.1px) 0 0 / 4px 4px;
+
+  /* type */
+  --font-ui: system-ui, -apple-system, 'SF Pro Text', 'Segoe UI', sans-serif;
+  --font-num: 'Commit Mono', ui-monospace, 'SF Mono', Menlo, Consolas, monospace;
+  --t-xs: 0.78rem; /* 12.5px: captions, labels */
+  --t-sm: 0.84rem; /* 13.5px */
+  --t-base: 0.94rem; /* 15px */
+  --t-lg: 1.125rem;
+  --t-title: 1.3rem;
+  --t-fig: clamp(1.75rem, 1.35rem + 2vw, 2.5rem);
+
+  /* space (4px base) */
+  --s-1: 4px;
+  --s-2: 8px;
+  --s-3: 12px;
+  --s-4: 16px;
+  --s-5: 24px;
+  --s-6: 32px;
+  --s-7: 48px;
+
+  /* radius carries hierarchy */
+  --r-cell: 2px;
+  --r-ctl: 6px;
+  --r-panel: 12px;
+  --r-pill: 999px;
+
+  --hit: 34px;
+  --dur: 140ms;
+  --ease: cubic-bezier(0.2, 0.7, 0.2, 1);
+  --page-pad: clamp(16px, 3vw, 40px);
+  --page-max: 1320px;
+}
+
+@media (max-width: 700px) {
+  :root {
+    --hit: 44px;
+  }
+}
+
+/* light: the system asks for it and the viewer has not forced dark, or the viewer forced light */
+@media (prefers-color-scheme: light) {
+  :root:not([data-theme='dark']) {
+    color-scheme: light;
+    --ground: #f5f2ed;
+    --panel: #fdfbf9;
+    --raised: #ffffff;
+    --sunk: #ece9e4;
+    --band-1: #f8f5f2;
+    --band-2: #f2f0ec;
+    --line: rgb(27 22 19 / 0.1);
+    --line-strong: rgb(27 22 19 / 0.2);
+    --ink: #1b1613;
+    --ink-2: #4c4643;
+    --ink-3: #68625e;
+    --accent: #b74b21;
+    --accent-ink: #ffffff;
+    --focus: #b74b21;
+    --selection: rgb(183 75 33 / 0.22);
+    --shadow-pop: 0 10px 30px rgb(27 22 19 / 0.16);
+    --good: #1d9330;
+    --warn: #a76d00;
+    --bad: #be2323;
+    --series-1: #2a78d6;
+    --series-2: #1baf7a;
+    --series-3: #6250d6;
+    --series-4: #eda100;
+    --series-5: #e87ba4;
+    --series-6: #008300;
+    --series-other: #898781;
+    --heat-0: #ece9e4;
+    --heat-1: #daa692;
+    --heat-2: #cf866b;
+    --heat-3: #c36847;
+    --heat-4: #b74b21;
+    --hatch-line: rgb(27 22 19 / 0.34);
+    --partial-line: rgb(27 22 19 / 0.5);
+    --partial-band: rgb(27 22 19 / 0.3);
+  }
+}
+
+:root[data-theme='light'] {
+  color-scheme: light;
+  --ground: #f5f2ed;
+  --panel: #fdfbf9;
+  --raised: #ffffff;
+  --sunk: #ece9e4;
+  --band-1: #f8f5f2;
+  --band-2: #f2f0ec;
+  --line: rgb(27 22 19 / 0.1);
+  --line-strong: rgb(27 22 19 / 0.2);
+  --ink: #1b1613;
+  --ink-2: #4c4643;
+  --ink-3: #68625e;
+  --accent: #b74b21;
+  --accent-ink: #ffffff;
+  --focus: #b74b21;
+  --selection: rgb(183 75 33 / 0.22);
+  --shadow-pop: 0 10px 30px rgb(27 22 19 / 0.16);
+  --good: #1d9330;
+  --warn: #a76d00;
+  --bad: #be2323;
+  --series-1: #2a78d6;
+  --series-2: #1baf7a;
+  --series-3: #6250d6;
+  --series-4: #eda100;
+  --series-5: #e87ba4;
+  --series-6: #008300;
+  --series-other: #898781;
+  --heat-0: #ece9e4;
+  --heat-1: #daa692;
+  --heat-2: #cf866b;
+  --heat-3: #c36847;
+  --heat-4: #b74b21;
+  --hatch-line: rgb(27 22 19 / 0.34);
+  --partial-line: rgb(27 22 19 / 0.5);
+  --partial-band: rgb(27 22 19 / 0.3);
+}

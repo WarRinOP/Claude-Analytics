@@ -1,0 +1,3 @@
+{"type":"system","subtype":"compact_boundary","uuid":"c1","sessionId":"sess-aaaa","timestamp":"2026-10-01T14:00:00.000Z","version":"9.9.9","isSidechain":false,"content":"SECRET_TEXT_X","compactMetadata":{"trigger":"manual","preTokens":123456}}
+{"type":"user","uuid":"c2","sessionId":"sess-aaaa","timestamp":"2026-10-01T14:00:01.000Z","isSidechain":false,"isCompactSummary":true,"message":{"role":"user","content":"SECRET_TEXT_X"}}
+{"type":"system","subtype":"compact_boundary","uuid":"c3","sessionId":"sess-aaaa","timestamp":"2026-10-01T14:05:00.000Z"}

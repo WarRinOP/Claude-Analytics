@@ -1,0 +1,15 @@
+{"type":"future-thing","version":"9.9.9","payload":"SECRET_TEXT_X"}
+{"type":"tools-used","sessionId":"sess-aaaa","version":"9.9.9","tools":["Read"]}
+{"sessionId":"sess-aaaa","note":"no type here"}
+{"type":"attachment","uuid":"x1","sessionId":"sess-aaaa","timestamp":"2026-10-01T16:00:00.000Z","attachment":{"content":"SECRET_TEXT_X"}}
+{"type":"api-request-blob","body":"SECRET_TEXT_X"}
+{"type":"queue-operation","operation":"enqueue","content":"SECRET_TEXT_X"}
+{"type":"file-history-snapshot","snapshot":{}}
+{"type":"ai-title","sessionId":"sess-aaaa","aiTitle":"Placeholder title"}
+{"type":"ai-title","sessionId":"sess-aaaa","aiTitle":""}
+{"type":"custom-title","sessionId":"sess-aaaa","customTitle":"Custom placeholder"}
+{"type":"assistant","uuid":"x2","sessionId":"sess-aaaa","timestamp":"2026-10-01T16:01:00.000Z","requestId":"req_extra","brandNewField":{"a":1},"message":{"id":"msg_extra","model":"claude-opus-5-5","content":[{"type":"text","text":"SECRET_TEXT_X"},{"type":"future_block","data":"SECRET_TEXT_X"}],"stop_reason":"end_turn","usage":{"input_tokens":4,"output_tokens":9,"cache_read_input_tokens":11,"cache_creation_input_tokens":0,"future_counter":77,"iterations":[{"input_tokens":4,"output_tokens":9}]}}}
+{"type":"assistant","uuid":"x3","sessionId":"sess-aaaa","timestamp":"2026-10-01T16:02:00.000Z","requestId":"req_nousage","message":{"id":"msg_nousage","model":"claude-opus-5-5","content":[{"type":"text","text":"SECRET_TEXT_X"}],"stop_reason":"end_turn"}}
+{"type":"assistant","uuid":"x4","sessionId":"sess-aaaa","timestamp":"2026-10-01T16:03:00.000Z","message":{"model":"claude-opus-5-5","content":[],"usage":{"input_tokens":1,"output_tokens":1}}}
+{"type":"assistant","uuid":"x5","sessionId":"sess-aaaa","timestamp":"2026-10-01T16:04:00.000Z","message":{"id":"msg_norequest","model":"claude-opus-5-5","content":[],"usage":{"input_tokens":1,"output_tokens":1}}}
+{"type":"assistant","uuid":"x6","sessionId":"sess-aaaa","timestamp":"bad","requestId":"r","message":{"id":"msg_badts","model":"claude-opus-5-5","content":[],"usage":{"input_tokens":1,"output_tokens":1}}}

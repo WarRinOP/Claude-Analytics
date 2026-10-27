@@ -1,0 +1,46 @@
+{
+  "name": "usage-ledger",
+  "version": "0.0.1",
+  "private": true,
+  "license": "MIT",
+  "type": "module",
+  "description": "Local first archive and dashboard for Claude Code usage on this Mac.",
+  "engines": {
+    "node": ">=24.13"
+  },
+  "packageManager": "pnpm@12.8.1",
+  "scripts": {
+    "dev": "node -e \"console.log('not yet implemented')\"",
+    "build": "node -e \"console.log('not yet implemented')\"",
+    "start": "node -e \"console.log('not yet implemented')\"",
+    "test": "vitest run",
+    "typecheck": "tsc --noEmit",
+    "lint": "eslint .",
+    "verify": "node scripts/verify.ts",
+    "dev:web": "vite --config web/vite.config.ts",
+    "build:web": "vite build --config web/vite.config.ts",
+    "typecheck:web": "tsc -p web/tsconfig.json",
+    "typecheck:e2e": "tsc -p test/e2e/tsconfig.json",
+    "test:e2e": "playwright test",
+    "perf": "node scripts/perf.ts"
+  },
+  "devDependencies": {
+    "@eslint/js": "10.0.1",
+    "@playwright/test": "1.64.1",
+    "@types/d3-array": "3.2.2",
+    "@types/d3-scale": "4.0.9",
+    "@types/node": "24.19.2",
+    "@types/react": "18.3.31",
+    "@types/react-dom": "18.3.7",
+    "@vitejs/plugin-react": "6.1.2",
+    "d3-array": "3.2.4",
+    "d3-scale": "4.0.2",
+    "eslint": "10.13.0",
+    "react": "18.3.1",
+    "react-dom": "18.3.1",
+    "typescript": "6.0.3",
+    "typescript-eslint": "8.72.1",
+    "vite": "8.3.5",
+    "vitest": "5.0.5"
+  }
+}

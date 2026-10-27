@@ -1,0 +1,16 @@
+node_modules/
+dist/
+web/dist/
+coverage/
+*.db
+*.db-wal
+*.db-shm
+*.db.bak-*
+.env*
+snapshots/
+ClaudeTranscriptArchive/
+test-results/
+playwright-report/
+.DS_Store
+__pycache__/
+*.pyc

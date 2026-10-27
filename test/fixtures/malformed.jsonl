@@ -1,0 +1,7 @@
+{"type":"assistant","uuid":"m1","sessionId":"sess-aaaa","timestamp":"2026-10-01T15:00:00.000Z","message":{"id":"msg_trunc","usa
+this is not json SECRET_TEXT_X
+[1,2,3]
+"just a string"
+null
+{"type":"user","uuid":"m2","sessionId":"sess-aaaa","timestamp":"not a date","message":{"role":"user","content":"SECRET_TEXT_X"}}
+{"type":"user","sessionId":"sess-aaaa","timestamp":"2026-10-01T15:00:00.000Z","message":{"role":"user","content":"SECRET_TEXT_X"}}

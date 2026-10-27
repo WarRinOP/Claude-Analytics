@@ -1,0 +1,15 @@
+/* Commit Mono, regular and bold only, self hosted (SIL OFL, see fonts/OFL-LICENSE.txt). No request leaves this machine. */
+@font-face {
+  font-family: 'Commit Mono';
+  font-style: normal;
+  font-weight: 400;
+  font-display: swap;
+  src: url('./fonts/commit-mono-latin-400-normal.woff2') format('woff2');
+}
+@font-face {
+  font-family: 'Commit Mono';
+  font-style: normal;
+  font-weight: 700;
+  font-display: swap;
+  src: url('./fonts/commit-mono-latin-700-normal.woff2') format('woff2');
+}

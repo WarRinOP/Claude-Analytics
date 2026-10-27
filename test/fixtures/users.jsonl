@@ -1,0 +1,6 @@
+{"type":"user","uuid":"u1","sessionId":"sess-aaaa","timestamp":"2026-10-01T09:59:00.000Z","version":"9.9.9","entrypoint":"cli","cwd":"/work/demo","gitBranch":"main","isSidechain":false,"message":{"role":"user","content":"SECRET_TEXT_X"}}
+{"type":"user","uuid":"u2","sessionId":"sess-aaaa","timestamp":"2026-10-01T09:59:10.000Z","isSidechain":false,"message":{"role":"user","content":[{"type":"tool_result","tool_use_id":"toolu_1","content":"SECRET_RESULT_X"}]},"toolUseResult":{"stdout":"SECRET_RESULT_X"}}
+{"type":"user","uuid":"u3","sessionId":"sess-aaaa","timestamp":"2026-10-01T09:59:20.000Z","isSidechain":false,"isMeta":true,"message":{"role":"user","content":"SECRET_TEXT_X"}}
+{"type":"user","uuid":"u4","sessionId":"sess-aaaa","timestamp":"2026-10-01T09:59:30.000Z","isSidechain":false,"isCompactSummary":true,"message":{"role":"user","content":"SECRET_TEXT_X"}}
+{"type":"user","uuid":"u5","sessionId":"sess-aaaa","timestamp":"2026-10-01T09:59:40.000Z","isSidechain":false,"isMeta":true,"isCompactSummary":true,"message":{"role":"user","content":[{"type":"text","text":"SECRET_TEXT_X"}]}}
+{"type":"user","uuid":"u6","sessionId":"sess-aaaa","timestamp":"2026-10-01T09:59:50.000Z","isSidechain":false,"message":{"role":"user","content":[{"type":"text","text":"SECRET_TEXT_X"}]}}
