@@ -1,6 +1,6 @@
-# Usage Ledger
+# Claude Analytics
 
-Usage Ledger keeps a permanent record of your Claude Code usage on this Mac and shows it in a dashboard in your browser. Claude Code deletes old transcripts after a while. This app copies the numbers out of them before they go, so your history stays.
+Claude Analytics keeps a permanent record of your Claude Code usage on this Mac and shows it in a dashboard in your browser. Claude Code deletes old transcripts after a while. This app copies the numbers out of them before they go, so your history stays.
 
 Everything runs on this Mac. Nothing is sent anywhere.
 
