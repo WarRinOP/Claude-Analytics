@@ -241,7 +241,10 @@ describe('sessions', () => {
     let reference: string | null = null;
     for (let run = 0; run < 24; run++) {
       const { db } = freshDb(env.dir);
-      for (const e of shuffled(events, rng(run + 7))) upsertSession(db, e, '-work-demo', 50 + run);
+      // One transaction per order: Windows syncs the disk on every commit, and one commit per row made this test time out there.
+      transaction(db, () => {
+        for (const e of shuffled(events, rng(run + 7))) upsertSession(db, e, '-work-demo', 50 + run);
+      });
       const snapshot = dump(db, 'SELECT * FROM sessions') + dump(db, 'SELECT project_key, project_dir, display_name FROM projects ORDER BY project_key');
       reference ??= snapshot;
       expect(snapshot).toBe(reference);
