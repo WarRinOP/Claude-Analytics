@@ -262,7 +262,8 @@ describe('sessions', () => {
       git_branch: null,
     });
     expect(reference).toContain('"display_name":"b"');
-  });
+    // 24 freshly migrated databases: about 7 s on a Windows CI disk, well under a second on macOS.
+  }, 30_000);
 
   it('falls back to dir:<project folder> when no event has a cwd', () => {
     const { db } = freshDb(env.dir);
