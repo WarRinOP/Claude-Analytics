@@ -1,11 +1,13 @@
 import { spawnSync } from 'node:child_process';
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, realpathSync, rmSync, statSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, realpathSync, statSync, writeFileSync } from 'node:fs';
 import { homedir, tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { STANDARD_NODE, buildPlist, chooseNode, isWorktreeOrTempPath, resolveProjectDir, xmlEscape } from '../../src/cli/launchagent.ts';
+import { removeTemp } from '../unit/helpers.ts';
 
 const ROOT = join(import.meta.dirname, '..', '..');
+// The real ~/Library/LaunchAgents folder and the plist mode exist only on macOS. Windows has its own tests for its start at login code.
 const mac = process.platform === 'darwin';
 
 let work: string;
@@ -24,7 +26,7 @@ beforeEach(() => {
   mkdirSync(agents);
   mkdirSync(data);
 });
-afterEach(() => rmSync(work, { recursive: true, force: true }));
+afterEach(() => removeTemp(work));
 
 function run(args: string[], env: Record<string, string | undefined> = {}) {
   const full: Record<string, string | undefined> = { ...process.env, LEDGER_DATA_DIR: data, CLAUDE_CONFIG_DIR: join(work, 'claude'), LEDGER_TZ: undefined, LEDGER_PORT: undefined, ...env };
@@ -127,7 +129,9 @@ describe('node and project folder choice', () => {
   });
 });
 
-describe('install', () => {
+// The LaunchAgent commands exist on macOS only; on Windows install and uninstall reach the scheduled task code, which has
+// its own tests (winstartup.test.ts).
+describe.runIf(mac)('install', () => {
   it('--dry-run prints the plist and the launchctl commands and changes nothing', () => {
     const r = run(['install', '--dry-run', '--project-dir', proj, '--launch-agents-dir', agents]);
     expect(r.code, r.err).toBe(0);
@@ -141,7 +145,7 @@ describe('install', () => {
     expect(readdirSync(data)).toEqual([]);
   });
 
-  it('--dry-run against the real folder only prints the real path', () => {
+  it.runIf(mac)('--dry-run against the real folder only prints the real path', () => {
     const r = run(['install', '--dry-run', '--project-dir', proj]);
     expect(r.code, r.err).toBe(0);
     expect(r.out).toContain(join(realpathSync(join(homedir(), 'Library')), 'LaunchAgents', 'com.usageledger.agent.plist'));
@@ -152,7 +156,7 @@ describe('install', () => {
     const r = run(['install', ...testArgs()]);
     expect(r.code, r.err).toBe(0);
     expect(r.out).toContain('launchctl was skipped');
-    expect(statSync(plistFile()).mode & 0o777).toBe(0o644);
+    if (mac) expect(statSync(plistFile()).mode & 0o777).toBe(0o644);
     expect(existsSync(join(data, 'logs'))).toBe(true);
     const text = readFileSync(plistFile(), 'utf8');
     expect(text).toContain(`<string>${join(proj, 'src', 'cli.ts')}</string>`);
@@ -178,7 +182,7 @@ describe('install', () => {
   });
 
   it('refuses with a plain sentence when the web build is missing', () => {
-    rmSync(join(proj, 'web', 'dist'), { recursive: true });
+    removeTemp(join(proj, 'web', 'dist'));
     for (const extra of [[], ['--dry-run']]) {
       const r = run(['install', ...testArgs(), ...extra]);
       expect(r.code).toBe(1);
@@ -203,7 +207,7 @@ describe('install', () => {
   });
 });
 
-describe('uninstall', () => {
+describe.runIf(mac)('uninstall', () => {
   it('--dry-run says what it would do and changes nothing', () => {
     run(['install', ...testArgs()]);
     const r = run(['uninstall', '--dry-run', '--launch-agents-dir', agents, '--delete-data', '--yes']);

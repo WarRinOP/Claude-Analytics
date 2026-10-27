@@ -20,7 +20,7 @@ import {
   upsertSourceFile,
   upsertUsage,
 } from '../../src/store/repo.ts';
-import { dump, freshDb, message, rng, shuffled, usage, useTempDataDir, type TempEnv } from '../unit/storeHelpers.ts';
+import { dump, freshDb, message, rng, shuffled, SOURCE_FILES_DUMP_SQL, usage, useTempDataDir, type TempEnv } from '../unit/storeHelpers.ts';
 
 let env: TempEnv;
 beforeEach(() => {
@@ -98,16 +98,16 @@ describe('idempotence', () => {
         bumpUnknownType(db, mainFile, 'future', null, 1, 10);
         bumpMissingField(db, mainFile, 'cache_creation', '1.2.3', 1, 10);
         upsertAlias(db, 'alias-dir', 'real-dir', 10);
-        upsertSourceFile(db, { dev: 1, ino: 1, path: '/src/main.jsonl', projectDir: '-work-demo', sessionId: 's1', agentId: null, isSubagent: false, size: 1, mtimeMs: 1, now: 1 });
+        upsertSourceFile(db, { dev: 1n, ino: 1n, path: '/src/main.jsonl', projectDir: '-work-demo', sessionId: 's1', agentId: null, isSubagent: false, size: 1, mtimeMs: 1, now: 1 });
       });
     };
     apply();
-    const before = ['usage_events', 'tool_calls', 'messages', 'api_errors', 'compactions', 'sessions', 'projects', 'session_titles', 'cost_snapshots', 'unknown_types', 'missing_fields', 'project_aliases', 'source_files'].map((t) => dump(db, `SELECT * FROM ${t}`));
+    const before = ['usage_events', 'tool_calls', 'messages', 'api_errors', 'compactions', 'sessions', 'projects', 'session_titles', 'cost_snapshots', 'unknown_types', 'missing_fields', 'project_aliases', 'source_files'].map((t) => dump(db, t === 'source_files' ? SOURCE_FILES_DUMP_SQL : `SELECT * FROM ${t}`));
     apply();
     const tables = ['usage_events', 'tool_calls', 'messages', 'api_errors', 'compactions', 'sessions', 'projects', 'session_titles', 'cost_snapshots', 'unknown_types', 'missing_fields', 'project_aliases', 'source_files'];
     for (const t of tables) expect(count(db, t), t).toBe(t === 'tool_calls' ? 2 : 1 + (t === 'source_files' ? 1 : 0));
     // counters are the only tables that add up on purpose
-    const after = tables.map((t) => dump(db, `SELECT * FROM ${t}`));
+    const after = tables.map((t) => dump(db, t === 'source_files' ? SOURCE_FILES_DUMP_SQL : `SELECT * FROM ${t}`));
     for (let i = 0; i < tables.length; i++) {
       if (tables[i] === 'unknown_types' || tables[i] === 'missing_fields') continue;
       expect(after[i], tables[i]).toBe(before[i]);
@@ -165,6 +165,14 @@ function buildLines(rand: () => number): Line[] {
   return lines;
 }
 
+// Two databases serve all the orders of a round: the rows of the previous order are wiped inside the transaction of the next
+// one. (One database per order made this test create and migrate 300 databases, and every upsert was its own commit; Windows
+// syncs the disk on each commit and macOS does not, so it took about 30 s there against 1.6 s here.)
+function wipeUsage(db: Db): void {
+  db.exec('DELETE FROM tool_calls');
+  db.exec('DELETE FROM usage_events');
+}
+
 describe('order independence', () => {
   it('50 random orders give byte identical rows, equal to folding mergeUsage', () => {
     for (let round = 0; round < 3; round++) {
@@ -173,10 +181,15 @@ describe('order independence', () => {
       expect(lines.length).toBeLessThanOrEqual(12);
       let reference: string | null = null;
       let referenceTools: string | null = null;
+      const run1 = freshDb(env.dir);
+      const run2 = freshDb(env.dir);
       for (let run = 0; run < 50; run++) {
         const order = shuffled(lines, rng(round * 100 + run));
-        const { db, mainFile, subFile } = freshDb(env.dir);
-        for (const l of order) upsertUsage(db, l.fact, l.file === 'sub' ? subFile : mainFile);
+        const { db, mainFile, subFile } = run1;
+        transaction(db, () => {
+          wipeUsage(db);
+          for (const l of order) upsertUsage(db, l.fact, l.file === 'sub' ? subFile : mainFile);
+        });
         const rows = dump(db, USAGE_SQL);
         const tools = dump(db, TOOLS_SQL);
         reference ??= rows;
@@ -190,13 +203,16 @@ describe('order independence', () => {
           const have = folded.get(l.fact.key);
           folded.set(l.fact.key, have === undefined ? l.fact : mergeUsage(have, l.fact));
         }
-        const expected = freshDb(env.dir);
-        for (const f of folded.values()) upsertUsage(expected.db, f, f.isSubagentFile ? expected.subFile : expected.mainFile);
+        const expected = run2;
+        transaction(expected.db, () => {
+          wipeUsage(expected.db);
+          for (const f of folded.values()) upsertUsage(expected.db, f, f.isSubagentFile ? expected.subFile : expected.mainFile);
+        });
         expect(rows).toBe(dump(expected.db, USAGE_SQL));
         expect(tools).toBe(dump(expected.db, TOOLS_SQL));
-        db.close();
-        expected.db.close();
       }
+      run1.db.close();
+      run2.db.close();
       const parsed = JSON.parse(reference as string) as Array<Record<string, unknown>>;
       expect(parsed).toHaveLength(3);
       for (const r of parsed) expect(r['rank']).toBeGreaterThanOrEqual(RANK_STOP_BONUS);
@@ -316,15 +332,15 @@ describe('cost snapshots', () => {
 describe('source files, counters, aliases', () => {
   it('upserts by (dev, ino), refreshes path and goes back to active', () => {
     const { db } = freshDb(env.dir);
-    const input = { dev: 9, ino: 99, path: '/a/one.jsonl', projectDir: 'p', sessionId: 's', agentId: null, isSubagent: false, size: 10, mtimeMs: 20, now: 30 };
+    const input = { dev: 9n, ino: 99n, path: '/a/one.jsonl', projectDir: 'p', sessionId: 's', agentId: null, isSubagent: false, size: 10, mtimeMs: 20, now: 30 };
     const id = upsertSourceFile(db, input);
     setOffset(db, id, 10, 2, 'abc', 10, 20, 31);
     markDeleted(db, id, 40);
-    expect(getSourceFile(db, 9, 99)).toMatchObject({ status: 'deleted', deletedDetectedAt: 40, byteOffset: 10, linesRead: 2, headHash: 'abc', lastIngestedAt: 31 });
+    expect(getSourceFile(db, 9n, 99n)).toMatchObject({ status: 'deleted', deletedDetectedAt: 40, byteOffset: 10, linesRead: 2, headHash: 'abc', lastIngestedAt: 31 });
     const again = upsertSourceFile(db, { ...input, path: '/b/two.jsonl', size: 50, mtimeMs: 60, now: 70 });
     expect(again).toBe(id);
-    expect(getSourceFile(db, 9, 99)).toMatchObject({ path: '/b/two.jsonl', size: 50, mtimeMs: 60, status: 'active', deletedDetectedAt: null, byteOffset: 10, firstSeenAt: 30 });
-    expect(getSourceFile(db, 1, 12345)).toBeUndefined();
+    expect(getSourceFile(db, 9n, 99n)).toMatchObject({ path: '/b/two.jsonl', size: 50, mtimeMs: 60, status: 'active', deletedDetectedAt: null, byteOffset: 10, firstSeenAt: 30 });
+    expect(getSourceFile(db, 1n, 12345n)).toBeUndefined();
   });
 
   it('counts add up per file, a null version is stored as an empty string, clearing is per file', () => {

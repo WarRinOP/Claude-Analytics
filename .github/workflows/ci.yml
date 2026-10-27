@@ -1,0 +1,149 @@
+name: ci
+
+on:
+  push:
+    branches: [cross-platform, main]
+  pull_request:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  windows:
+    runs-on: windows-latest
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24.13.0
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm exec playwright install chromium
+      # Python on Windows has no time zone database of its own; the reference script needs one (CI only, not an app dependency).
+      - name: Time zone data for the Python reference
+        run: python -m pip install --quiet --disable-pip-version-check tzdata
+      - run: pnpm --silent verify
+      # Shows in the log that the Windows style fixtures were compared with the Python reference, not skipped.
+      - name: Windows fixtures against the Python reference
+        run: pnpm exec vitest run test/integration/windowsFixtures.test.ts --reporter=verbose
+      - name: Collect failure details
+        if: failure()
+        continue-on-error: true
+        run: |
+          pnpm exec vitest run --reporter=json --outputFile=test-results/vitest.json
+          pnpm audit --prod *> test-results/audit.txt
+      - name: Upload test results
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: test-results
+          path: test-results/
+          retention-days: 7
+          if-no-files-found: ignore
+
+  # A real install, run and uninstall of the start at login task. The runner is an administrator
+  # with no real logon, so this proves registration, schtasks /Run, serve answering and a clean uninstall. It cannot
+  # prove the non administrator path or the logon trigger itself.
+  windows-startup:
+    runs-on: windows-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24.13.0
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm build:web
+      - name: Install dry run
+        run: node src/cli.ts install --dry-run
+      - name: Install
+        env:
+          LEDGER_TZ: Asia/Dhaka
+          LEDGER_RETENTION_DAYS: '45'
+        run: node src/cli.ts install
+      - name: Check the task, the dashboard and the carried settings
+        shell: pwsh
+        run: |
+          schtasks /Query /TN UsageLedger
+          if ($LASTEXITCODE -ne 0) { throw 'The task UsageLedger is not registered.' }
+          $r = Invoke-WebRequest -UseBasicParsing -Uri http://127.0.0.1:47821/api/health
+          if ($r.StatusCode -ne 200) { throw "The dashboard answered $($r.StatusCode), not 200." }
+          $h = $r.Content | ConvertFrom-Json
+          if ($h.tz -ne 'Asia/Dhaka') { throw "LEDGER_TZ was not carried into the task: the dashboard reports $($h.tz)." }
+          if ($h.retentionDays -ne 45) { throw "LEDGER_RETENTION_DAYS was not carried into the task: the dashboard reports $($h.retentionDays)." }
+          $data = Join-Path $env:LOCALAPPDATA 'UsageLedger'
+          foreach ($f in 'launcher.js', 'task.xml') {
+            if (-not (Test-Path -LiteralPath (Join-Path $data $f))) { throw "$f is missing in $data." }
+          }
+          exit 0
+      # Task Scheduler does not restart a task whose process was killed (RestartOnFailure only covers a failed start), so
+      # the task has a trigger that fires every minute. Kill the process and wait for a new one to answer.
+      - name: Restart after a crash
+        shell: pwsh
+        run: |
+          $lock = Join-Path $env:LOCALAPPDATA 'UsageLedger\ingest.lock'
+          $old = [int](Get-Content -LiteralPath $lock)
+          Write-Host "Stopping the ledger process $old"
+          Stop-Process -Id $old -Force
+          $start = Get-Date
+          $ok = $false
+          $new = 0
+          while (((Get-Date) - $start).TotalSeconds -lt 150) {
+            Start-Sleep -Seconds 10
+            try {
+              $r = Invoke-WebRequest -UseBasicParsing -TimeoutSec 3 -Uri http://127.0.0.1:47821/api/health
+              if ($r.StatusCode -eq 200) {
+                $new = [int](Get-Content -LiteralPath $lock)
+                if ($new -ne $old) { $ok = $true; break }
+              }
+            } catch {}
+          }
+          $seconds = [int]((Get-Date) - $start).TotalSeconds
+          if (-not $ok) {
+            schtasks /Query /TN UsageLedger /V /FO LIST
+            throw "The ledger did not come back with a new process within 150 seconds (old pid $old, lock now names $new)."
+          }
+          Write-Host "The ledger came back after $seconds seconds as process $new (was $old)."
+          exit 0
+      - name: Install again while it runs (an update)
+        env:
+          LEDGER_TZ: Asia/Dhaka
+          LEDGER_RETENTION_DAYS: '45'
+        run: node src/cli.ts install
+      - name: Check the dashboard answers after the reinstall
+        shell: pwsh
+        run: |
+          $r = Invoke-WebRequest -UseBasicParsing -Uri http://127.0.0.1:47821/api/health
+          if ($r.StatusCode -ne 200) { throw "After the reinstall the dashboard answered $($r.StatusCode), not 200." }
+          exit 0
+      - name: Uninstall
+        run: node src/cli.ts uninstall
+      - name: Check nothing is left
+        shell: pwsh
+        run: |
+          $null = schtasks /Query /TN UsageLedger 2>&1
+          if ($LASTEXITCODE -eq 0) { throw 'The task UsageLedger is still registered after uninstall.' }
+          $client = New-Object System.Net.Sockets.TcpClient
+          try { $client.Connect('127.0.0.1', 47821); $open = $true } catch { $open = $false } finally { $client.Dispose() }
+          if ($open) { throw 'Port 47821 still answers after uninstall.' }
+          $data = Join-Path $env:LOCALAPPDATA 'UsageLedger'
+          foreach ($f in 'launcher.js', 'task.xml') {
+            if (Test-Path -LiteralPath (Join-Path $data $f)) { throw "$f is still in $data after uninstall." }
+          }
+          exit 0
+      - name: Show diagnostics
+        if: failure()
+        continue-on-error: true
+        shell: pwsh
+        run: |
+          schtasks /Query /TN UsageLedger /V /FO LIST
+          $data = Join-Path $env:LOCALAPPDATA 'UsageLedger'
+          Get-ChildItem -Force $data
+          Get-Content -ErrorAction SilentlyContinue (Join-Path $data 'launcher.js')
+          Get-Content -ErrorAction SilentlyContinue (Join-Path $data 'logs\ledger.log') -Tail 40
+          exit 0

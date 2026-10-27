@@ -1,14 +1,15 @@
 import { spawn, type ChildProcess } from 'node:child_process';
 import { request as httpRequest } from 'node:http';
 import { createServer } from 'node:net';
-import { mkdtempSync, realpathSync, rmSync } from 'node:fs';
+import { mkdtempSync, realpathSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import type { SyncedEvent } from '../../src/api/types.ts';
 import { formatClock } from '../../src/metrics/time.ts';
 import { put, usageLine, userLine } from '../unit/ingestHelpers.ts';
-import { useTempDataDir, type TempEnv } from '../unit/storeHelpers.ts';
+import { openAndMigrate, useTempDataDir, type TempEnv } from '../unit/storeHelpers.ts';
+import { removeTemp } from '../unit/helpers.ts';
 
 const ROOT = join(import.meta.dirname, '..', '..');
 const SID = 'aaaaaaaa-0000-0000-0000-00000000000a';
@@ -22,14 +23,38 @@ beforeEach(() => {
 });
 afterEach(async () => {
   for (const c of children.splice(0)) {
-    if (c.exitCode === null) {
+    // A process stopped by a signal (every kill on Windows) has exitCode null but signalCode set, and no second exit event.
+    if (c.exitCode === null && c.signalCode === null) {
       c.kill('SIGKILL');
       await new Promise((r) => c.once('exit', r));
     }
   }
   env.restore();
-  rmSync(work, { recursive: true, force: true });
+  removeTemp(work);
 });
+
+// Stops a running serve or watch process and checks how it ended.
+// POSIX: SIGTERM, exit code 0, and (when the command prints it) the `stopped` line.
+// Windows: child.kill() is a hard stop, no handler runs and the exit code is null, so there is nothing to read from the
+// process. The archive is checked instead: it opens, no migration is pending, it is not corrupt and holds `rows` usage rows.
+async function stopCli(c: Cli, opts: { rows: number; printsStopped: boolean }): Promise<void> {
+  if (process.platform !== 'win32') {
+    c.child.kill('SIGTERM');
+    expect(await c.exit()).toBe(0);
+    if (opts.printsStopped) expect(c.out()).toContain('stopped');
+    return;
+  }
+  c.child.kill();
+  await c.exit();
+  const { db, result } = openAndMigrate(join(env.dir, 'ledger.db'));
+  try {
+    expect(result.applied).toEqual([]);
+    expect(db.prepare('PRAGMA integrity_check').all()).toEqual([{ integrity_check: 'ok' }]);
+    expect((db.prepare('SELECT COUNT(*) AS n FROM usage_events').get() as { n: number }).n).toBe(opts.rows);
+  } finally {
+    db.close();
+  }
+}
 
 function freePort(): Promise<number> {
   return new Promise((resolve, reject) => {
@@ -78,7 +103,8 @@ function cli(args: string[], extraEnv: Record<string, string>): Cli {
         const t = setTimeout(() => bad(new Error(`no ${re} in: ${buf}`)), ms);
         waiters.push({ re, ok: () => (clearTimeout(t), ok()) });
       }),
-    exit: () => new Promise((r) => (child.exitCode !== null ? r(child.exitCode) : child.once('exit', (code) => r(code)))),
+    exit: () =>
+      new Promise((r) => (child.exitCode !== null || child.signalCode !== null ? r(child.exitCode) : child.once('exit', (code) => r(code)))),
   };
 }
 
@@ -162,9 +188,7 @@ describe('node src/cli.ts serve', () => {
     expect((JSON.parse((await get(port, '/api/summary')).text) as { responses: number }).responses).toBe(2);
     sse.destroy();
 
-    s.child.kill('SIGTERM');
-    expect(await s.exit()).toBe(0);
-    expect(s.out()).toContain('stopped');
+    await stopCli(s, { rows: 2, printsStopped: true });
   }, 40_000);
 
   it('refuses a second copy, a busy port, a bad zone and a bad port with a plain message', async () => {
@@ -177,8 +201,7 @@ describe('node src/cli.ts serve', () => {
     expect(await second.exit()).toBe(2);
     expect(second.out()).toMatch(/Another ingest is already running/);
 
-    first.child.kill('SIGTERM');
-    expect(await first.exit()).toBe(0);
+    await stopCli(first, { rows: 1, printsStopped: false });
 
     // The port is taken by something else now.
     const blocker = createServer();
@@ -198,6 +221,26 @@ describe('node src/cli.ts serve', () => {
   }, 40_000);
 });
 
+describe('node src/cli.ts serve without a transcript folder', () => {
+  // A machine where Claude Code has not run (a CI runner) has no projects folder. serve must start, answer, report the missing
+  // folder once, and retry quietly instead of printing a watch error on every retry.
+  it('starts, answers, and reports the missing folder once', async () => {
+    const port = await freePort();
+    const s = cli(['serve'], { LEDGER_PORT: String(port), LEDGER_TZ: 'UTC' });
+    await s.waitFor(/startup:/);
+    const health = await get(port, '/api/summary');
+    expect(health.status).toBe(200);
+    // the watcher retries after 1 s and 3 s; wait past both
+    await new Promise((r) => setTimeout(r, 3600));
+    expect(s.child.exitCode).toBeNull();
+    const problems = s.out().split('\n').filter((l) => l.startsWith('sync problem:'));
+    expect(problems).toHaveLength(1);
+    expect(problems[0]).toMatch(/ENOENT|no such file|cannot find/i);
+    expect((await get(port, '/api/summary')).status).toBe(200);
+    await stopCli(s, { rows: 0, printsStopped: true });
+  }, 40_000);
+});
+
 describe('node src/cli.ts watch', () => {
   it('prints clock times in the configured zone', async () => {
     seedTranscript();
@@ -206,7 +249,6 @@ describe('node src/cli.ts watch', () => {
     const line = w.out().split('\n').find((l) => l.includes('startup:')) as string;
     expect(clockOffsetMinutes(line, 'Pacific/Auckland')).toBeLessThanOrEqual(2);
     expect(clockOffsetMinutes(line, 'UTC')).toBeGreaterThan(300);
-    w.child.kill('SIGTERM');
-    expect(await w.exit()).toBe(0);
+    await stopCli(w, { rows: 1, printsStopped: false });
   }, 30_000);
 });

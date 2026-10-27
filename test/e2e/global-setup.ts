@@ -3,10 +3,11 @@
 //   CLAUDE_CONFIG_DIR  a temp folder, so the transcript root is <temp>/claude/projects and the real ~/.claude is never read
 //   LEDGER_TZ=UTC      so the local day of every synthetic event is the same on every machine
 import { spawn, spawnSync, type ChildProcess } from 'node:child_process';
-import { existsSync, mkdirSync, mkdtempSync, realpathSync, rmSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, realpathSync } from 'node:fs';
 import { createServer } from 'node:net';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
+import { removeTemp } from '../unit/helpers.ts';
 import { writeTranscripts } from './fixture.ts';
 
 const root = resolve(import.meta.dirname, '..', '..');
@@ -52,7 +53,7 @@ export default async function globalSetup(): Promise<() => Promise<void>> {
   writeTranscripts(projects);
 
   const port = await freePort();
-  let child: ChildProcess | null = spawn('node', ['src/cli.ts', 'serve'], {
+  let child: ChildProcess | null = spawn(process.execPath, ['src/cli.ts', 'serve'], {
     cwd: root,
     env: { ...process.env, LEDGER_DATA_DIR: data, CLAUDE_CONFIG_DIR: config, LEDGER_PORT: String(port), LEDGER_TZ: 'UTC' },
     stdio: ['ignore', 'pipe', 'pipe'],
@@ -70,8 +71,14 @@ export default async function globalSetup(): Promise<() => Promise<void>> {
       exited,
     ]);
   } catch (err) {
-    child.kill('SIGTERM');
-    rmSync(work, { recursive: true, force: true });
+    const dying = child;
+    if (dying.exitCode === null) {
+      await new Promise<void>((done) => {
+        dying.once('exit', () => done());
+        dying.kill('SIGTERM');
+      });
+    }
+    removeTemp(work);
     throw err;
   }
   process.env['LEDGER_E2E_URL'] = url;
@@ -87,6 +94,6 @@ export default async function globalSetup(): Promise<() => Promise<void>> {
         setTimeout(() => c.kill('SIGKILL'), 5000).unref();
       });
     }
-    rmSync(work, { recursive: true, force: true });
+    removeTemp(work);
   };
 }

@@ -1,27 +1,38 @@
 # Claude Analytics
 
-Claude Analytics keeps a permanent record of your Claude Code usage on this Mac and shows it in a dashboard in your browser. Claude Code deletes old transcripts after a while. This app copies the numbers out of them before they go, so your history stays.
+Claude Analytics keeps a permanent record of your Claude Code usage on this computer and shows it in a dashboard in your browser. It runs on macOS and on Windows. Claude Code deletes old transcripts after a while. This app copies the numbers out of them before they go, so your history stays.
 
-Everything runs on this Mac. Nothing is sent anywhere.
+Everything runs on this computer. Nothing is sent anywhere.
 
 ## Privacy promises
 
-- It only reads Claude Code's transcript files. It never writes, moves or deletes anything under `~/.claude` or `~/Library/Application Support/Claude`.
+- It reads Claude Code's transcript files. For one health check it also reads two values, the session id and the last update time, from the small live session files that sit next to them. It never writes, moves or deletes anything in Claude Code's folders or in the Claude desktop app's folders (the exact list is under "Where the data lives").
 - It stores counts, ids, timestamps, model names, tool names, token numbers and folder paths. It does not store what you typed, what Claude answered, tool inputs or outputs, or file contents.
 - It stores the short title Claude Code gives each session, because the dashboard shows it. Titles can describe what you worked on. They are left out of exports unless you ask for them.
 - It never reads your Claude Code settings, passwords, tokens, cookies or keychain items.
 - The dashboard listens on `127.0.0.1` only, so other computers cannot reach it. It makes no outgoing network requests: no fonts, no analytics, no update checks.
-- Its own files live in one folder: `~/Library/Application Support/UsageLedger/`.
+- Its own files live in one folder (see "Where the data lives").
+
+Who can read that folder:
+
+- On macOS the app creates its folders with mode 700 and its files with mode 600, so only your user can open them.
+- On Windows the archive sits inside your user profile, which by default only you, SYSTEM and administrators can read. The app does not change Windows permissions.
 
 ## What you need
 
-- A Mac with Node 24.13 or newer at `/usr/local/bin/node`.
+On both systems:
+
+- Node 24.13 or newer.
 - pnpm.
-- Claude Code, used on this Mac.
+- Claude Code, used on this computer.
+
+On macOS: a Mac. The login service uses `/usr/local/bin/node` when that is the Node you run `install` with. If you run it with another Node, `install` warns you and uses that one.
+
+On Windows: Windows 10 or 11. You do not need administrator rights. The commands below are written for PowerShell. The project folder path must not contain a percent sign or a double quote.
 
 ## Install
 
-Run these in the project folder:
+Run these in the project folder. They are the same on both systems:
 
 ```
 pnpm install
@@ -29,21 +40,43 @@ pnpm build:web
 node src/cli.ts install
 ```
 
-The last command starts the ledger every time you log in and keeps it running. It also starts it right now and checks that the dashboard answers. To see what it would do first, without changing anything, run `node src/cli.ts install --dry-run`. That prints the file it would write and the exact `launchctl` commands.
+The last command starts the ledger every time you log in and keeps it running. It also starts it right now and checks that the dashboard answers. To see what it would do first, without changing anything, add `--dry-run`:
+
+```
+node src/cli.ts install --dry-run
+```
+
+On macOS the dry run prints the file it would write and the exact `launchctl` commands.
+
+On Windows the dry run prints the small launcher file and the task definition it would write, and the exact `schtasks` commands.
 
 Run `install` from the main project folder, not from a copy in a temporary folder. If you run it from one, it refuses and tells you so.
 
-If you change the project folder or reinstall Node, run `node src/cli.ts install` again.
+If you move the project folder or reinstall Node, run `node src/cli.ts install` again.
+
+### Start at login: what it sets up
+
+On macOS, `install` writes a LaunchAgent for your user (`~/Library/LaunchAgents/com.usageledger.agent.plist`) and loads it. It runs only while you are logged in.
+
+On Windows, `install` registers a scheduled task named `UsageLedger` for your user only. It needs no administrator rights.
+
+- A small launcher file, `launcher.js` in the data folder, is run by `wscript.exe`, so the ledger starts hidden and no console window stays open.
+- The task starts when you sign in. If the ledger stops, Windows starts it again within about a minute, while you are signed in.
+- It runs only while you are signed in, like the macOS one. It does not run for other users and does not run while you are signed out.
+- If `wscript.exe` is missing on the PC, `install` says so and starts the ledger through PowerShell in a hidden window instead. A window may flash for a moment at login.
+- You can see the task in Task Scheduler under the name `UsageLedger`.
 
 ## Open the dashboard
 
 The address is `http://127.0.0.1:47821`.
 
-To keep it in the Dock like an app, open the address in Safari and choose File > Add to Dock.
+On macOS, to keep it in the Dock like an app, open the address in Safari and choose File > Add to Dock.
+
+On Windows, open the address in Edge or Chrome. Both can install a site as an app, or you can pin it. Look in the browser's menu for an option such as "Install this site as an app". The wording changes between browser versions.
 
 ## Commands
 
-Run each as `node src/cli.ts <command>` in the project folder.
+Run each as `node src/cli.ts <command>` in the project folder, on both systems.
 
 | Command | What it does |
 | --- | --- |
@@ -56,7 +89,9 @@ Run each as `node src/cli.ts <command>` in the project folder.
 | `install` | Starts the ledger at login. `--dry-run` shows what it would do. |
 | `uninstall` | Stops the login service and removes it. `--dry-run` shows what it would do. |
 
-Settings are environment variables: `LEDGER_PORT` changes the port (default 47821), `LEDGER_TZ` sets the time zone (default is this Mac's zone, for example `Asia/Dhaka`), and `LEDGER_RETENTION_DAYS` tells the ledger how long your Claude Code keeps transcripts (default 30). The login service uses the default port and carries `LEDGER_TZ` and `LEDGER_RETENTION_DAYS` only if they were set when you ran `install`.
+`serve`, `watch` and `ingest` also take `--root <folder>`, which adds one more folder of transcripts to read.
+
+Settings are environment variables: `LEDGER_PORT` changes the port (default 47821), `LEDGER_TZ` sets the time zone (default is this computer's zone, for example `Asia/Dhaka`), and `LEDGER_RETENTION_DAYS` tells the ledger how long your Claude Code keeps transcripts (default 30). See "Settings" below for how to set them on each system.
 
 ### Export
 
@@ -66,7 +101,7 @@ node src/cli.ts export --csv --from 2026-10-01 --to 2026-10-27 --models claude-s
 node src/cli.ts export --stdout daily
 ```
 
-`--csv` writes two files into a new folder named by date and time under `~/Library/Application Support/UsageLedger/exports/`:
+`--csv` writes two files into a new folder named by date and time inside the `exports` folder of the data folder (`~/Library/Application Support/UsageLedger/exports/` on macOS, `%LOCALAPPDATA%\UsageLedger\exports\` on Windows):
 
 - `daily.csv`: one row per local day with prompts, responses, sessions, the four token counts, the total, and whether the day is possibly incomplete.
 - `sessions.csv`: one row per session with project, start and end in local time, active minutes, prompts, responses, tokens, models, and whether the source file is gone.
@@ -97,14 +132,35 @@ The Usage breakdown panel is a ledger of tokens and cost by period. Choose Month
 
 Neither command writes to Claude Code's folders. Run `doctor` first when something looks wrong.
 
-## Time zone and retention
+## Settings
 
-Both are set with environment variables.
+The time zone, the retention period and the port are set with environment variables.
 
-- `LEDGER_TZ` is the time zone that decides which local day a response belongs to, for example `Asia/Dhaka` or `America/New_York`. Without it the ledger uses this Mac's zone. An unknown name is refused with a message. If you change it, the daily numbers are rebuilt from the stored facts the next time the ledger starts. Raw history is not touched.
+- `LEDGER_TZ` is the time zone that decides which local day a response belongs to, for example `Asia/Dhaka` or `America/New_York`. Without it the ledger uses this computer's zone. An unknown name is refused with a message. If you change it, the daily numbers are rebuilt from the stored facts the next time the ledger starts. Raw history is not touched.
 - `LEDGER_RETENTION_DAYS` is how many days Claude Code keeps a transcript before deleting it (30 unless you changed Claude Code's `cleanupPeriodDays`). The ledger uses it only to mark early days as "possibly incomplete". It accepts a whole number from 1 to 3650.
+- `LEDGER_PORT` is the port of the dashboard (1 to 65535, default 47821).
 
-The login service carries `LEDGER_TZ` and `LEDGER_RETENTION_DAYS`, each only if it was set when you ran `node src/cli.ts install` (run install again after changing one). It does not carry `LEDGER_PORT`, so the service always listens on port 47821, the address you added to the Dock. Commands you run yourself in a terminal (`serve`, `doctor`, `export`) read all three from your environment.
+How to set them for one terminal session:
+
+On macOS (zsh or bash):
+
+```
+export LEDGER_TZ="Asia/Dhaka"
+export LEDGER_RETENTION_DAYS=90
+export LEDGER_PORT=47900
+```
+
+On Windows (PowerShell):
+
+```
+$env:LEDGER_TZ = "Asia/Dhaka"
+$env:LEDGER_RETENTION_DAYS = "90"
+$env:LEDGER_PORT = "47900"
+```
+
+These last only for that terminal window. Commands you run yourself in it (`serve`, `doctor`, `export`) read all three.
+
+The login service carries `LEDGER_TZ` and `LEDGER_RETENTION_DAYS`, each only if it was set when you ran `node src/cli.ts install` (set it in the same terminal first, then run install again after changing one). It does not carry `LEDGER_PORT`, so the service always listens on port 47821, the address you added to the Dock or pinned. This is the same on both systems.
 
 ## Speed check
 
@@ -112,14 +168,42 @@ The login service carries `LEDGER_TZ` and `LEDGER_RETENTION_DAYS`, each only if 
 
 ## Where the data lives
 
-Everything the app writes is in `~/Library/Application Support/UsageLedger/`:
+Where the ledger reads, on both systems: Claude Code's transcripts in the `projects` folder of its config folder. That is `~/.claude/projects` on macOS and `%USERPROFILE%\.claude\projects` on Windows. If the `CLAUDE_CONFIG_DIR` environment variable is set and not empty, Claude Code's config folder is that folder instead, and the ledger follows it. The small live session files are read from the `sessions` folder next to `projects`.
 
-- `ledger.db`: the archive, with backups made before upgrades.
-- `logs/ledger.log`: one line per sync pass, counts and paths only.
-- `logs/launchagent.out.log` and `logs/launchagent.err.log`: what the login service prints.
-- `exports/`: your CSV exports.
+Where the ledger writes, the data folder:
 
-The only file written outside that folder is the login service file, `~/Library/LaunchAgents/com.usageledger.agent.plist`.
+- On macOS: `~/Library/Application Support/UsageLedger/`
+- On Windows: `%LOCALAPPDATA%\UsageLedger\`, which is `AppData\Local\UsageLedger` in your user folder. It is the machine local folder, never the roaming one, so a roaming profile does not copy the database to other PCs.
+
+Inside it:
+
+- `ledger.db`: the archive, with backups made before upgrades (and the small `-wal` and `-shm` files SQLite keeps while the ledger runs).
+- `logs/ledger.log` (`logs\ledger.log` on Windows): one line per sync pass, counts and paths only. It rotates, keeping three files.
+- `ingest.lock`: holds the process number of the running ledger, so two copies never write at once.
+- `exports/` (`exports\` on Windows): your CSV exports.
+- On macOS: `logs/launchagent.out.log` and `logs/launchagent.err.log`, what the login service prints.
+- On Windows: `launcher.js` and `task.xml`, written by `install` and removed by `uninstall`. The login service prints nowhere on Windows. If the dashboard does not come up, run `node src/cli.ts doctor` or look at the task `UsageLedger` in Task Scheduler.
+
+The only things outside that folder:
+
+- On macOS, the login service file `~/Library/LaunchAgents/com.usageledger.agent.plist`.
+- On Windows, the scheduled task `UsageLedger` itself, which Windows keeps. No file of yours is written for it.
+
+The ledger never writes in these folders, even if it is told to:
+
+- On both systems: `.claude` in your user folder, Claude Code's config folder (`CLAUDE_CONFIG_DIR` when set) and its `projects` folder.
+- On macOS: `~/Library/Application Support/Claude` and `~/Library/Application Support/Claude-3p`.
+- On Windows: `%APPDATA%\Claude`, `%APPDATA%\Claude-3p`, `%LOCALAPPDATA%\Claude`, `%LOCALAPPDATA%\Claude-3p`, `%LOCALAPPDATA%\AnthropicClaude`, and every folder in `%LOCALAPPDATA%\Packages` whose name starts with `Claude_` (the Microsoft Store version of the Claude desktop app). On Windows these checks ignore upper and lower case and accept both `\` and `/`.
+
+## Update
+
+To move to a newer copy of the project:
+
+1. Replace the project folder's files with the new version (or pull it, if you use git).
+2. Run `pnpm install` and `pnpm build:web` in the project folder.
+3. Run `node src/cli.ts install` again. It stops the running copy, registers the login service again with the new paths and starts it. Your archive is kept. If the new version needs to change the archive, it makes a backup first.
+
+If `install` reports that something already answers on the port, run `node src/cli.ts uninstall`, then `node src/cli.ts install`.
 
 ## Uninstall
 
@@ -127,19 +211,26 @@ The only file written outside that folder is the login service file, `~/Library/
 node src/cli.ts uninstall
 ```
 
-This stops the login service and removes its file. Your archive is kept. To delete the archive too:
+On macOS this stops the login service and removes its file.
+
+On Windows this stops the ledger, removes the scheduled task `UsageLedger`, and deletes `launcher.js` and `task.xml` from the data folder.
+
+Your archive is kept. To delete the archive too:
 
 ```
 node src/cli.ts uninstall --delete-data --yes
 ```
 
-That removes the whole `UsageLedger` data folder and cannot be undone. It never touches `~/.claude`. Add `--dry-run` to see what would happen first.
+That removes the whole `UsageLedger` data folder and cannot be undone. It never touches Claude Code's folders. Add `--dry-run` to see what would happen first.
 
 ## What the numbers cover, and what they do not
 
 - **Claude Code sweeps old transcripts.** It deletes a transcript once it has not been written for 30 days. Anything deleted before the ledger first ran is gone and cannot be recovered. The archive covers the time from the first run onward, plus whatever transcripts still existed then.
 - **Some early days may be incomplete.** On days before the ledger's first run minus 30 days, only sessions that were continued later still existed. Those days are marked "possibly incomplete" in the dashboard and `partial` in the CSV. Their numbers are real but may be too low.
-- **Only this Mac and only Claude Code.** Claude on the web or in the cloud, other computers, other tools and other apps are not included.
+- **Only this computer and only Claude Code.** Claude on the web or in the cloud, other computers, other tools and other apps are not included.
+- **Windows: WSL is not read.** Transcripts that Claude Code writes inside WSL live in the Linux home folder, which the ledger does not read. A native Windows install of Claude Code is read.
+- **Linux is not supported.** On any other system the ledger reports that the system is not supported.
+- **Windows: one project, two spellings.** A project started from two different shells can arrive as `C:\` and as `c:\`. The ledger counts them as one project.
 - **Cost is an estimate.** Where cost is shown, it is the API price equivalent of the tokens, not what you paid.
 
 Changing Claude Code's `cleanupPeriodDays` setting, to keep transcripts longer, is your own choice. This app never reads or changes that setting. If you change it, set `LEDGER_RETENTION_DAYS` to the same number so the "possibly incomplete" days are marked correctly.

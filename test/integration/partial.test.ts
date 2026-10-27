@@ -1,6 +1,6 @@
 // Possibly incomplete days: completeFrom, partialGap and the partial flags,
 // and the archive_started_at value that the first ingest pass stores.
-import { mkdtempSync, realpathSync, rmSync } from 'node:fs';
+import { mkdtempSync, realpathSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
@@ -10,10 +10,10 @@ import { runIngest } from '../../src/ingest/ingest.ts';
 import { archiveStartedAt, completeFrom } from '../../src/metrics/queries.ts';
 import { getMeta, rebuildAll, resolvePromptModels, setMeta } from '../../src/metrics/rollups.ts';
 import { dayBounds } from '../../src/metrics/time.ts';
-import { openAndMigrate } from '../../src/store/migrate.ts';
 import { HOUR, MIN, seeder, shapeErrors, type Seeder, type Shape } from '../unit/metricsHelpers.ts';
 import { put, usageLine } from '../unit/ingestHelpers.ts';
-import { useTempDataDir, type TempEnv } from '../unit/storeHelpers.ts';
+import { openAndMigrate, useTempDataDir, type TempEnv } from '../unit/storeHelpers.ts';
+import { removeTemp } from '../unit/helpers.ts';
 
 let env: TempEnv;
 let work: string;
@@ -25,7 +25,7 @@ beforeEach(() => {
 });
 afterEach(() => {
   env.restore();
-  rmSync(work, { recursive: true, force: true });
+  removeTemp(work);
   if (savedRetention === undefined) delete process.env['LEDGER_RETENTION_DAYS'];
   else process.env['LEDGER_RETENTION_DAYS'] = savedRetention;
 });

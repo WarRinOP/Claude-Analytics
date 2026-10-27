@@ -1,31 +1,38 @@
 import { createHash } from 'node:crypto';
 import {
   appendFileSync,
+  constants,
   mkdirSync,
   mkdtempSync,
   readFileSync,
   realpathSync,
-  rmSync,
   statSync,
   symlinkSync,
   truncateSync,
   writeFileSync,
 } from 'node:fs';
+import { lstat, open as realOpen } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { classify } from '../../src/ingest/classify.ts';
 import { discover, type DiscoveredFile } from '../../src/ingest/discover.ts';
 import {
   HEAD_BYTES,
+  OPEN_RETRIES,
+  OPEN_RETRY_MS,
   headHash,
   headLength,
   missingFiles,
+  openNoFollow,
   planRead,
   readLines,
   type LineBatch,
+  type OpenDeps,
   type ReadOptions,
 } from '../../src/ingest/reader.ts';
 import type { SourceFileRow } from '../../src/store/repo.ts';
+import { mainCtx, removeTemp, SYMLINK_SKIP_REASON, symlinksWork } from './helpers.ts';
 
 let base: string;
 let root: string;
@@ -39,7 +46,7 @@ beforeEach(() => {
 });
 
 afterEach(() => {
-  rmSync(base, { recursive: true, force: true });
+  removeTemp(base);
 });
 
 async function readAll(path: string, start = 0, lineNo = 0, opts: ReadOptions = {}): Promise<LineBatch[]> {
@@ -107,7 +114,7 @@ describe('headHash', () => {
     expect(headLength(1_000_000)).toBe(HEAD_BYTES);
   });
 
-  it('does not follow a symlink', async () => {
+  it.skipIf(!symlinksWork)(`does not follow a symlink${symlinksWork ? '' : ` (${SYMLINK_SKIP_REASON})`}`, async () => {
     writeFileSync(file, 'abc\n');
     const link = join(root, 'proj', 'link.jsonl');
     symlinkSync(file, link);
@@ -118,8 +125,8 @@ describe('headHash', () => {
 describe('planRead (pure)', () => {
   const f: DiscoveredFile = {
     path: '/x/s.jsonl',
-    dev: 1,
-    ino: 2,
+    dev: 1n,
+    ino: 2n,
     size: 500,
     mtimeMs: 1,
     projectDir: 'p',
@@ -129,8 +136,8 @@ describe('planRead (pure)', () => {
   };
   const known: SourceFileRow = {
     id: 1,
-    dev: 1,
-    ino: 2,
+    dev: 1n,
+    ino: 2n,
     path: '/x/s.jsonl',
     projectDir: 'p',
     sessionId: 's',
@@ -181,9 +188,9 @@ describe('planRead (pure)', () => {
 
 describe('missingFiles', () => {
   it('returns active known rows whose identity is not discovered', () => {
-    const mk = (ino: number, status: 'active' | 'deleted'): SourceFileRow => ({
-      id: ino,
-      dev: 9,
+    const mk = (ino: bigint, status: 'active' | 'deleted'): SourceFileRow => ({
+      id: Number(ino),
+      dev: 9n,
       ino,
       path: `/p/${ino}`,
       projectDir: 'p',
@@ -200,7 +207,7 @@ describe('missingFiles', () => {
       lastIngestedAt: null,
       deletedDetectedAt: null,
     });
-    const d = (ino: number, dev = 9): DiscoveredFile => ({
+    const d = (ino: bigint, dev = 9n): DiscoveredFile => ({
       path: `/q/${ino}`,
       dev,
       ino,
@@ -211,9 +218,9 @@ describe('missingFiles', () => {
       agentId: null,
       isSubagent: false,
     });
-    const known = [mk(1, 'active'), mk(2, 'active'), mk(3, 'deleted'), mk(4, 'active')];
+    const known = [mk(1n, 'active'), mk(2n, 'active'), mk(3n, 'deleted'), mk(4n, 'active')];
     // ino 1 moved path (still discovered by identity), ino 4 only exists on another device
-    expect(missingFiles(known, [d(1), d(4, 8)]).map((r) => r.ino)).toEqual([2, 4]);
+    expect(missingFiles(known, [d(1n), d(4n, 8n)]).map((r) => r.ino)).toEqual([2n, 4n]);
     expect(missingFiles(known, [])).toHaveLength(3);
   });
 });
@@ -500,7 +507,7 @@ describe('a file that goes away or shrinks while reading', () => {
     expect(r).toEqual([{ lines: [], oversized: [], endOffset: 12, endLineNo: 3, stopped: 'missing' }]);
   });
 
-  it('a symlink at the path is treated as missing, never followed', async () => {
+  it.skipIf(!symlinksWork)(`a symlink at the path is treated as missing, never followed${symlinksWork ? '' : ` (${SYMLINK_SKIP_REASON})`}`, async () => {
     writeFileSync(file, 'a\nb\n');
     const link = join(root, 'proj', 'link.jsonl');
     symlinkSync(file, link);
@@ -541,5 +548,178 @@ describe('a file that goes away or shrinks while reading', () => {
     }
     // the file can still be removed and read again without trouble
     expect(flat(await readAll(file)).lines).toHaveLength(100);
+  });
+});
+
+describe('CRLF line endings', () => {
+  const rows = ['{"a":1}', '{"b":"é"}', '{"c":3}'];
+
+  it('JSON.parse already tolerates the carriage return, the reader still trims it so text and lengths are the same', () => {
+    expect(JSON.parse('{"a":1}\r')).toEqual({ a: 1 });
+  });
+
+  it('a line ending in CRLF gives the same text and line numbers as one ending in LF, and the byte offsets count the CR', async () => {
+    writeFileSync(file, rows.join('\n') + '\n');
+    const lf = flat(await readAll(file));
+    writeFileSync(file, rows.join('\r\n') + '\r\n');
+    const crlf = flat(await readAll(file));
+    expect(crlf.lines.map((l) => l.text)).toEqual(lf.lines.map((l) => l.text));
+    expect(crlf.lines.map((l) => l.lineNo)).toEqual([1, 2, 3]);
+    expect(crlf.lines.map((l) => l.byteOffset)).toEqual([0, 9, 9 + Buffer.byteLength(rows[1] as string) + 2]);
+    expect(crlf.endOffset).toBe(Buffer.byteLength(rows.join('\r\n')) + 2);
+    expect(crlf.endLineNo).toBe(3);
+  });
+
+  it('is the same when the CR and the LF fall in different blocks', async () => {
+    writeFileSync(file, rows.join('\r\n') + '\r\n');
+    for (const blockBytes of [1, 2, 3, 5, 8]) {
+      const r = flat(await readAll(file, 0, 0, { blockBytes, batchBytes: 4 }));
+      expect(r.lines.map((l) => l.text), `block ${blockBytes}`).toEqual(rows);
+    }
+  });
+
+  it('classifies a CRLF line exactly like the same line with LF', async () => {
+    const line = '{"type":"user","uuid":"u1","sessionId":"s1","timestamp":"2026-10-01T09:00:00.000Z","cwd":"C:\\Users\\me\\My Project","message":{"role":"user","content":"x"}}';
+    writeFileSync(file, line + '\r\n');
+    const [read] = flat(await readAll(file)).lines;
+    expect(read?.text).toBe(line);
+    expect(classify(read?.text ?? '', mainCtx)).toEqual(classify(line, mainCtx));
+  });
+
+  it('a blank CRLF line counts as an empty line, and a last line without its LF waits even when its CR is there', async () => {
+    writeFileSync(file, 'x\r\n\r\ny\r');
+    const r = flat(await readAll(file));
+    expect(r.lines).toEqual([{ text: 'x', lineNo: 1, byteOffset: 0 }]);
+    expect(r.endLineNo).toBe(2);
+    expect(r.endOffset).toBe(5);
+    appendFileSync(file, '\n');
+    const more = flat(await readAll(file, r.endOffset ?? 0, r.endLineNo ?? 0));
+    expect(more.lines).toEqual([{ text: 'y', lineNo: 3, byteOffset: 5 }]);
+  });
+});
+
+describe('a file Windows has locked', () => {
+  const failWith = (code: string): Error => Object.assign(new Error(`${code}: simulated`), { code });
+
+  // `codes` are the errors the first opens fail with; later opens work. Sleeps are recorded, not waited for.
+  function lockedDeps(codes: string[]): { deps: OpenDeps; sleeps: number[]; opens: () => number } {
+    const sleeps: number[] = [];
+    let opens = 0;
+    const deps: OpenDeps = {
+      lstat: (p) => lstat(p, { bigint: true }),
+      open: async (p, flags) => {
+        opens += 1;
+        const c = codes[opens - 1];
+        if (c !== undefined) throw failWith(c);
+        return realOpen(p, flags);
+      },
+      sleep: async (ms) => {
+        sleeps.push(ms);
+      },
+    };
+    return { deps, sleeps, opens: () => opens };
+  }
+
+  it('retries EBUSY, EPERM and EACCES, 50 ms apart, then reads normally', async () => {
+    expect([OPEN_RETRIES, OPEN_RETRY_MS]).toEqual([3, 50]);
+    writeFileSync(file, 'a\nb\n');
+    for (const code of ['EBUSY', 'EPERM', 'EACCES']) {
+      const t = lockedDeps([code, code]);
+      const r = flat(await readAll(file, 0, 0, { openDeps: t.deps }));
+      expect(r.lines.map((l) => l.text), code).toEqual(['a', 'b']);
+      expect(t.sleeps, code).toEqual([50, 50]);
+      expect(t.opens(), code).toBe(3);
+    }
+  });
+
+  it('headHash retries the same way', async () => {
+    writeFileSync(file, 'hello\n');
+    const t = lockedDeps(['EBUSY']);
+    expect(await headHash(file, 5, t.deps)).toBe(sha('hello'));
+    expect(t.sleeps).toEqual([50]);
+  });
+
+  it('gives up after three retries and throws the last error, so the caller records the read error as before', async () => {
+    writeFileSync(file, 'a\n');
+    const t = lockedDeps(['EBUSY', 'EBUSY', 'EBUSY', 'EBUSY', 'EBUSY']);
+    await expect(readAll(file, 0, 0, { openDeps: t.deps })).rejects.toMatchObject({ code: 'EBUSY' });
+    expect(t.opens()).toBe(1 + OPEN_RETRIES);
+    expect(t.sleeps).toEqual([50, 50, 50]);
+  });
+
+  it('does not retry other errors, and a vanished file is missing, not an error', async () => {
+    writeFileSync(file, 'a\n');
+    const eio = lockedDeps(['EIO']);
+    await expect(readAll(file, 0, 0, { openDeps: eio.deps })).rejects.toMatchObject({ code: 'EIO' });
+    expect(eio.sleeps).toEqual([]);
+    const gone = lockedDeps(['ENOENT']);
+    const r = await readAll(file, 0, 0, { openDeps: gone.deps });
+    expect(r[0]?.stopped).toBe('missing');
+    expect(gone.sleeps).toEqual([]);
+  });
+});
+
+describe('the open never follows a symlink, on any system', () => {
+  const never = async (): Promise<void> => undefined;
+
+  it('refuses a path that lstat reports as a symlink, without opening it', async () => {
+    let opened = 0;
+    const deps: OpenDeps = {
+      lstat: async () => ({ dev: 1n, ino: 2n, isSymbolicLink: () => true }),
+      open: async (p, flags) => {
+        opened += 1;
+        return realOpen(p, flags);
+      },
+      sleep: never,
+    };
+    writeFileSync(file, 'abc\n');
+    expect(await openNoFollow(file, deps)).toBeNull();
+    expect(await headHash(file, 3, deps)).toBeNull();
+    expect((await readAll(file, 0, 0, { openDeps: deps }))[0]?.stopped).toBe('missing');
+    expect(opened).toBe(0);
+  });
+
+  it('treats a handle that is not the file lstat saw as missing, and accepts the same file', async () => {
+    writeFileSync(file, 'abc\n');
+    const seen = await lstat(file, { bigint: true });
+    const withIdentity = (dev: bigint, ino: bigint): OpenDeps => ({
+      lstat: async () => ({ dev, ino, isSymbolicLink: () => false }),
+      open: (p, flags) => realOpen(p, flags),
+      sleep: never,
+    });
+    const otherIno = withIdentity(seen.dev, seen.ino + 1n);
+    expect(await openNoFollow(file, otherIno)).toBeNull();
+    expect(await headHash(file, 3, otherIno)).toBeNull();
+    expect((await readAll(file, 0, 0, { openDeps: otherIno }))[0]?.stopped).toBe('missing');
+    expect(await openNoFollow(file, withIdentity(seen.dev + 1n, seen.ino))).toBeNull();
+    const same = await openNoFollow(file, withIdentity(seen.dev, seen.ino));
+    expect(same).not.toBeNull();
+    await same?.close();
+  });
+
+  it('compares ids above 2^53 exactly (they differ only in the low bits)', async () => {
+    writeFileSync(file, 'abc\n');
+    const seen = await lstat(file, { bigint: true });
+    const high = (1n << 60n) + 1n;
+    // The file's real id is small, so a lstat id that only differs in low bits of a huge number must not match it.
+    const deps: OpenDeps = { lstat: async () => ({ dev: seen.dev, ino: high, isSymbolicLink: () => false }), open: (p, f) => realOpen(p, f), sleep: never };
+    expect(await openNoFollow(file, deps)).toBeNull();
+  });
+
+  it.skipIf(!symlinksWork)(`on a system without O_NOFOLLOW the identity check alone refuses a link swapped in after the lstat${symlinksWork ? '' : ` (${SYMLINK_SKIP_REASON})`}`, async () => {
+    writeFileSync(file, 'abc\n');
+    const other = join(root, 'proj', 'other.jsonl');
+    writeFileSync(other, 'zzz\n');
+    const link = join(root, 'proj', 'swapped.jsonl');
+    symlinkSync(file, link);
+    // lstat saw a regular file (the other one) before the path was swapped for a link; open follows the link, as on Windows.
+    const o = await lstat(other, { bigint: true });
+    const deps: OpenDeps = {
+      lstat: async () => ({ dev: o.dev, ino: o.ino, isSymbolicLink: () => false }),
+      open: (p) => realOpen(p, constants.O_RDONLY),
+      sleep: never,
+    };
+    expect(await openNoFollow(link, deps)).toBeNull();
+    expect(await headHash(link, 3, deps)).toBeNull();
   });
 });

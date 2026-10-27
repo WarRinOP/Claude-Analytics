@@ -1,4 +1,4 @@
-import { mkdirSync, mkdtempSync, realpathSync, rmSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, realpathSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
@@ -6,12 +6,12 @@ import { runIngest, type RunSummary } from '../../src/ingest/ingest.ts';
 import { afterPass, ensureRollups, getMeta, rebuildAll, refreshDays, resolvePromptModels, rollupMatchesFacts } from '../../src/metrics/rollups.ts';
 import { dayBounds } from '../../src/metrics/time.ts';
 import { recomputeAllCosts } from '../../src/store/costs.ts';
-import { openDb } from '../../src/store/db.ts';
 import type { Db } from '../../src/store/db.ts';
-import { migrate, openAndMigrate } from '../../src/store/migrate.ts';
+import { migrate } from '../../src/store/migrate.ts';
 import { put, usageLine, userLine } from '../unit/ingestHelpers.ts';
 import { HOUR, MIN, seeder } from '../unit/metricsHelpers.ts';
-import { dump, rng, useTempDataDir, type TempEnv } from '../unit/storeHelpers.ts';
+import { dump, openAndMigrate, openDb, rng, useTempDataDir, type TempEnv } from '../unit/storeHelpers.ts';
+import { removeTemp } from '../unit/helpers.ts';
 
 let env: TempEnv;
 let work: string;
@@ -21,7 +21,7 @@ beforeEach(() => {
 });
 afterEach(() => {
   env.restore();
-  rmSync(work, { recursive: true, force: true });
+  removeTemp(work);
 });
 
 const DHAKA = 'Asia/Dhaka';

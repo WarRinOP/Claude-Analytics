@@ -2,10 +2,11 @@
 // line, a deleted file) or need more of it (three pages of sessions) without disturbing the shared fixture the other specs read.
 // Same safety rules as global-setup: a temp data folder, a temp CLAUDE_CONFIG_DIR, UTC, nothing under ~/.claude is touched.
 import { spawn, spawnSync, type ChildProcess } from 'node:child_process';
-import { mkdirSync, mkdtempSync, realpathSync, rmSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, realpathSync } from 'node:fs';
 import { createServer } from 'node:net';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
+import { removeTemp } from '../unit/helpers.ts';
 
 const repo = resolve(import.meta.dirname, '..', '..');
 
@@ -39,7 +40,7 @@ export async function startSecond(write: (projects: string) => void): Promise<Se
   write(projects);
   const port = await freePort();
   const env = { ...process.env, LEDGER_DATA_DIR: data, CLAUDE_CONFIG_DIR: config, LEDGER_PORT: String(port), LEDGER_TZ: 'UTC' };
-  const child: ChildProcess = spawn('node', ['src/cli.ts', 'serve'], { cwd: repo, env, stdio: ['ignore', 'pipe', 'pipe'] });
+  const child: ChildProcess = spawn(process.execPath, ['src/cli.ts', 'serve'], { cwd: repo, env, stdio: ['ignore', 'pipe', 'pipe'] });
   let output = '';
   child.stdout?.on('data', (d: Buffer) => (output += d.toString()));
   child.stderr?.on('data', (d: Buffer) => (output += d.toString()));
@@ -78,14 +79,14 @@ export async function startSecond(write: (projects: string) => void): Promise<Se
           setTimeout(() => child.kill('SIGKILL'), 5000).unref();
         });
       }
-      rmSync(work, { recursive: true, force: true });
+      removeTemp(work);
     },
   };
 }
 
 // `node src/cli.ts doctor` with the same folders as the server.
 export function runDoctor(s: Second): { code: number | null; out: string } {
-  const r = spawnSync('node', ['src/cli.ts', 'doctor'], { cwd: repo, env: s.env, encoding: 'utf8' });
+  const r = spawnSync(process.execPath, ['src/cli.ts', 'doctor'], { cwd: repo, env: s.env, encoding: 'utf8' });
   return { code: r.status, out: r.stdout };
 }
 

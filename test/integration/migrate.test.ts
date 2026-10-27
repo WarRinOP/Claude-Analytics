@@ -2,9 +2,9 @@ import { existsSync, mkdirSync, readdirSync, statSync, writeFileSync } from 'nod
 import { homedir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { openDb } from '../../src/store/db.ts';
-import { migrate, openAndMigrate } from '../../src/store/migrate.ts';
-import { useTempDataDir, type TempEnv } from '../unit/storeHelpers.ts';
+import { migrate } from '../../src/store/migrate.ts';
+import { unixModes } from '../unit/helpers.ts';
+import { openAndMigrate, openDb, useTempDataDir, type TempEnv } from '../unit/storeHelpers.ts';
 
 let env: TempEnv;
 beforeEach(() => {
@@ -50,10 +50,10 @@ describe('B11 migrations', () => {
     const { db } = openAndMigrate(file);
     expect((db.prepare('PRAGMA journal_mode').get() as { journal_mode: string }).journal_mode).toBe('wal');
     expect((db.prepare('PRAGMA foreign_keys').get() as { foreign_keys: number }).foreign_keys).toBe(1);
-    expect(statSync(file).mode & 0o777).toBe(0o600);
+    if (unixModes) expect(statSync(file).mode & 0o777).toBe(0o600);
     db.prepare("INSERT INTO meta (key, value) VALUES ('k', 'v')").run();
     for (const side of ['-wal', '-shm']) {
-      if (existsSync(file + side)) expect(statSync(file + side).mode & 0o777).toBe(0o600);
+      if (unixModes && existsSync(file + side)) expect(statSync(file + side).mode & 0o777).toBe(0o600);
     }
     db.close();
   });
@@ -82,7 +82,7 @@ describe('B13 backups', () => {
     expect(second.result.applied).toEqual([2]);
     expect(second.result.backupPath).toBe(join(env.dir, 'ledger.db.bak-1-20261027'));
     const backup = second.result.backupPath as string;
-    expect(statSync(backup).mode & 0o777).toBe(0o600);
+    if (unixModes) expect(statSync(backup).mode & 0o777).toBe(0o600);
     const copy = openDb(backup);
     expect(copy.prepare('SELECT x FROM a1').all().map((r) => (r as { x: number }).x)).toEqual([7]);
     expect(copy.prepare("SELECT name FROM sqlite_master WHERE name = 'a2'").all()).toEqual([]);

@@ -5,14 +5,15 @@
 //   are recorded as aliases (name and the link target as written). Every other symlink met while listing
 //   a folder goes to `skipped`.
 // - Layout read: <root>/<project>/<file> and <root>/<project>/<sid>/subagents/<file>. Nothing deeper.
-// - A file is identified by (dev, ino). One file reached through two paths (hard link) appears once.
+// - A file is identified by (dev, ino), both bigint: NTFS file ids are 64 bit and usually above 2^53.
+//   One file reached through two paths (hard link) appears once.
 import { lstatSync, readdirSync, readlinkSync, type BigIntStats, type Dirent } from 'node:fs';
 import { join } from 'node:path';
 
 export interface DiscoveredFile {
   path: string;
-  dev: number;
-  ino: number;
+  dev: bigint;
+  ino: bigint;
   size: number;
   mtimeMs: number;
   // Folder name directly under the root.
@@ -73,7 +74,8 @@ function reasonFor(err: unknown): string {
 
 const MAX_SAFE = BigInt(Number.MAX_SAFE_INTEGER);
 
-// A dev or ino that does not fit a JavaScript integer exactly cannot be stored, so it is refused.
+// A size that does not fit a JavaScript integer exactly cannot be kept as a number, so it is refused.
+// (dev and ino are never converted: they stay bigint end to end.)
 export function toSafeNumber(n: bigint): number | null {
   return n >= 0n && n <= MAX_SAFE ? Number(n) : null;
 }
@@ -113,17 +115,15 @@ function addFile(path: string, parsed: ParsedName, projectDir: string, st: State
     return;
   }
   if (!s.isFile()) return;
-  const dev = toSafeNumber(s.dev);
-  const ino = toSafeNumber(s.ino);
   const size = toSafeNumber(s.size);
-  if (dev === null || ino === null || size === null) {
-    st.skipped.push({ path, reason: 'inode too large' });
+  if (size === null) {
+    st.skipped.push({ path, reason: 'file too large' });
     return;
   }
   const file: DiscoveredFile = {
     path,
-    dev,
-    ino,
+    dev: s.dev,
+    ino: s.ino,
     size,
     mtimeMs: Number(s.mtimeMs),
     projectDir,
@@ -131,7 +131,7 @@ function addFile(path: string, parsed: ParsedName, projectDir: string, st: State
     agentId: parsed.agentId,
     isSubagent: parsed.isSubagent,
   };
-  const key = `${dev}:${ino}`;
+  const key = `${file.dev}:${file.ino}`;
   const prior = st.byIdentity.get(key);
   // Same file through two paths: keep the path that sorts first.
   if (prior === undefined || file.path < prior.path) st.byIdentity.set(key, file);

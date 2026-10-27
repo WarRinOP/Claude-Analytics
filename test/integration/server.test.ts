@@ -1,6 +1,6 @@
 import { request as httpRequest, type IncomingHttpHeaders } from 'node:http';
 import { connect } from 'node:net';
-import { mkdirSync, mkdtempSync, realpathSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, realpathSync, symlinkSync, writeFileSync } from 'node:fs';
 import { networkInterfaces, tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
@@ -12,10 +12,10 @@ import { startServer, type RunningServer } from '../../src/server/http.ts';
 import { handlePass } from '../../src/server/live.ts';
 import { hostAllowed } from '../../src/server/security.ts';
 import { createSseHub } from '../../src/server/sse.ts';
-import { openAndMigrate } from '../../src/store/migrate.ts';
 import { put, usageLine, userLine } from '../unit/ingestHelpers.ts';
 import { HOUR, IDLE, seeder } from '../unit/metricsHelpers.ts';
-import { useTempDataDir, type TempEnv } from '../unit/storeHelpers.ts';
+import { openAndMigrate, useTempDataDir, type TempEnv } from '../unit/storeHelpers.ts';
+import { removeTemp } from '../unit/helpers.ts';
 
 let env: TempEnv;
 let work: string;
@@ -27,7 +27,7 @@ beforeEach(() => {
 afterEach(async () => {
   for (const r of running.splice(0)) await r.close();
   env.restore();
-  rmSync(work, { recursive: true, force: true });
+  removeTemp(work);
 });
 
 interface Reply {

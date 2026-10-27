@@ -7,16 +7,19 @@ import {
   readdirSync,
   readFileSync,
   realpathSync,
-  rmSync,
   statSync,
   symlinkSync,
   writeFileSync,
 } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { join, sep } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { discover, parseSubagentName, parseTopLevelName, toSafeNumber } from '../../src/ingest/discover.ts';
 import { readLines } from '../../src/ingest/reader.ts';
+import { removeTemp, SYMLINK_SKIP_REASON, symlinksWork } from './helpers.ts';
+
+// A discovered path relative to the test root, with / between parts on every system (Windows gives backslashes).
+const relOf = (p: string): string => p.slice(root.length + 1).split(sep).join('/');
 
 let base: string;
 let root: string;
@@ -28,7 +31,7 @@ beforeEach(() => {
 });
 
 afterEach(() => {
-  rmSync(base, { recursive: true, force: true });
+  removeTemp(base);
 });
 
 function put(rel: string, text = '{"type":"x"}\n'): string {
@@ -74,7 +77,7 @@ describe('session id parsing', () => {
     put('projA/page-1.jpg');
     put('stray.jsonl');
     const d = discover(root);
-    const rel = d.files.map((f) => [f.path.slice(root.length + 1), f.sessionId, f.agentId, f.isSubagent, f.projectDir]);
+    const rel = d.files.map((f) => [relOf(f.path), f.sessionId, f.agentId, f.isSubagent, f.projectDir]);
     expect(rel).toEqual([
       ['projA/s1.jsonl', 's1', null, false, 'projA'],
       ['projA/s1/subagents/agent-ab12.jsonl', 's1', 'ab12', true, 'projA'],
@@ -94,7 +97,7 @@ describe('session id parsing', () => {
   });
 });
 
-describe('14 symlinks are never followed', () => {
+describe.skipIf(!symlinksWork)(`14 symlinks are never followed${symlinksWork ? '' : ` (${SYMLINK_SKIP_REASON})`}`, () => {
   it('alias, loop, linked file and linked subagents folder: no loop, no error, each file once', () => {
     const real = put('proj/real-session.jsonl');
     put('proj/sid1/subagents/agent-one.jsonl');
@@ -116,7 +119,7 @@ describe('14 symlinks are never followed', () => {
 
     const d = discover(root);
 
-    expect(d.files.map((f) => f.path.slice(root.length + 1))).toEqual([
+    expect(d.files.map((f) => relOf(f.path))).toEqual([
       'proj/real-session.jsonl',
       'proj/sid1/subagents/agent-one.jsonl',
     ]);
@@ -124,7 +127,7 @@ describe('14 symlinks are never followed', () => {
       { aliasDir: 'alias-abs', targetDir: join(root, 'proj') },
       { aliasDir: 'alias-rel', targetDir: 'proj' },
     ]);
-    expect(d.skipped.map((s) => [s.path.slice(root.length + 1), s.reason])).toEqual([
+    expect(d.skipped.map((s) => [relOf(s.path), s.reason])).toEqual([
       ['proj/dangling.jsonl', 'symlink not followed'],
       ['proj/linked.jsonl', 'symlink not followed'],
       ['proj/proj-loop', 'symlink not followed'],
@@ -162,8 +165,11 @@ describe('discover results', () => {
     const d = discover(root);
     expect(d.files.map((f) => f.path)).toEqual([p1, p2]);
     const s = statSync(p2);
+    const ids = statSync(p2, { bigint: true });
     const f = d.files[1];
-    expect(f).toMatchObject({ dev: s.dev, ino: s.ino, size: 5 });
+    expect(f).toMatchObject({ dev: ids.dev, ino: ids.ino, size: 5 });
+    expect(typeof f?.dev).toBe('bigint');
+    expect(typeof f?.ino).toBe('bigint');
     expect(f?.mtimeMs).toBe(Math.floor(s.mtimeMs));
   });
 
@@ -175,7 +181,8 @@ describe('discover results', () => {
     });
   });
 
-  it('a folder that cannot be read goes to skipped', () => {
+  // Windows has no Unix modes: chmod cannot make a folder unreadable there, so this one case is skipped on win32.
+  it.skipIf(process.platform === 'win32')('a folder that cannot be read goes to skipped (skipped on Windows: chmod cannot make a folder unreadable there)', () => {
     if (process.getuid?.() === 0) return;
     put('locked/s1.jsonl');
     put('open/s2.jsonl');
@@ -219,8 +226,10 @@ describe('41 (partial) the source tree is not modified', () => {
     put('proj/s1.jsonl', lines.join('\n') + '\n');
     put('proj/s1/subagents/agent-a.jsonl', lines.slice(0, 50).join('\n') + '\npartial');
     put('proj/s1/tool-results/out.txt', 'x'.repeat(5000));
-    symlinkSync('proj', join(root, 'alias'));
-    symlinkSync(join(root, 'proj'), join(root, 'proj', 'loop'));
+    if (symlinksWork) {
+      symlinkSync('proj', join(root, 'alias'));
+      symlinkSync(join(root, 'proj'), join(root, 'proj', 'loop'));
+    }
 
     const before = snapshot(root);
     const d = discover(root);

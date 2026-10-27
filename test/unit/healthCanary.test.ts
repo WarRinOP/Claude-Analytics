@@ -1,11 +1,12 @@
 // The transcripts-may-have-moved canary against a temp sessions folder and temp transcript files.
-import { mkdirSync, mkdtempSync, realpathSync, rmSync, utimesSync, writeFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, realpathSync, utimesSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { checkCanary, displayPath } from '../../src/metrics/health.ts';
 import { upsertSourceFile } from '../../src/store/repo.ts';
 import { freshDb, useTempDataDir, type TempEnv } from './storeHelpers.ts';
+import { removeTemp } from './helpers.ts';
 
 const NOW = Date.parse('2026-10-27T12:00:00Z');
 const MIN = 60_000;
@@ -24,7 +25,7 @@ beforeEach(() => {
 });
 afterEach(() => {
   env.restore();
-  rmSync(work, { recursive: true, force: true });
+  removeTemp(work);
 });
 
 function registry(file: string, body: Record<string, unknown>): void {
@@ -32,14 +33,14 @@ function registry(file: string, body: Record<string, unknown>): void {
 }
 
 // A transcript file last written `ageMs` before NOW, tracked in the archive under `sessionId`.
-let ino = 100;
+let ino = 100n;
 function transcript(db: ReturnType<typeof freshDb>['db'], sessionId: string, ageMs: number, tracked = true): string {
   const path = join(projects, '-work-demo', `${sessionId}.jsonl`);
   writeFileSync(path, '{}\n');
   utimesSync(path, (NOW - ageMs) / 1000, (NOW - ageMs) / 1000);
   if (tracked) {
-    ino += 1;
-    upsertSourceFile(db, { dev: 9, ino, path, projectDir: '-work-demo', sessionId, agentId: null, isSubagent: false, size: 3, mtimeMs: NOW - ageMs, now: NOW });
+    ino += 1n;
+    upsertSourceFile(db, { dev: 9n, ino, path, projectDir: '-work-demo', sessionId, agentId: null, isSubagent: false, size: 3, mtimeMs: NOW - ageMs, now: NOW });
   }
   return path;
 }

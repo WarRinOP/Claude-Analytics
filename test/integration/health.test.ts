@@ -7,10 +7,10 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { runIngest } from '../../src/ingest/ingest.ts';
 import { health, type Ctx } from '../../src/metrics/queries.ts';
 import { handleApi } from '../../src/server/routes.ts';
-import { openAndMigrate } from '../../src/store/migrate.ts';
 import { put, usageLine, userLine } from '../unit/ingestHelpers.ts';
 import { IDLE } from '../unit/metricsHelpers.ts';
-import { useTempDataDir, type TempEnv } from '../unit/storeHelpers.ts';
+import { openAndMigrate, useTempDataDir, type TempEnv } from '../unit/storeHelpers.ts';
+import { removeTemp } from '../unit/helpers.ts';
 
 let env: TempEnv;
 let work: string;
@@ -20,7 +20,7 @@ beforeEach(() => {
 });
 afterEach(() => {
   env.restore();
-  rmSync(work, { recursive: true, force: true });
+  removeTemp(work);
 });
 
 const SID = 'aaaaaaaa-0000-0000-0000-00000000000a';

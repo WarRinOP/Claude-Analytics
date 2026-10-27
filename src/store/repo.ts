@@ -1,6 +1,5 @@
 // Repository functions over the archive. Every function takes the database first.
 // Writes are idempotent and order independent; callers wrap batches in transaction().
-import { basename } from 'node:path';
 import type {
   ApiErrorFact,
   CompactionFact,
@@ -12,6 +11,7 @@ import type {
 import { priceEventNanos } from '../metrics/prices.ts';
 import { pricedFromRow, type CostColumns } from './costs.ts';
 import { stmt, type Db } from './db.ts';
+import { projectKeyOf, projectLabelOf } from './projectKey.ts';
 
 type Row = Record<string, unknown>;
 
@@ -21,9 +21,20 @@ function bool(b: boolean): number {
 
 // ---------------------------------------------------------------- source files
 
+// File identity is (dev, ino), both bigint in memory (NTFS file ids are 64 bit and usually above 2^53). The INTEGER columns
+// hold the signed 64 bit form, so every unsigned id round trips exactly. A value below 2^63 (every id on macOS) is stored as
+// the same number as before. Reading casts to text: a number read from SQLite would lose digits above 2^53.
+export function toStoredId(x: bigint): bigint {
+  return BigInt.asIntN(64, x);
+}
+
+export function fromStoredId(text: string): bigint {
+  return BigInt.asUintN(64, BigInt(text));
+}
+
 export interface SourceFileInput {
-  dev: number;
-  ino: number;
+  dev: bigint;
+  ino: bigint;
   path: string;
   projectDir: string;
   sessionId: string;
@@ -36,8 +47,8 @@ export interface SourceFileInput {
 
 export interface SourceFileRow {
   id: number;
-  dev: number;
-  ino: number;
+  dev: bigint;
+  ino: bigint;
   path: string;
   projectDir: string;
   sessionId: string;
@@ -68,8 +79,8 @@ export function upsertSourceFile(db: Db, f: SourceFileInput): number {
        deleted_detected_at = NULL
      RETURNING id`,
   ).get({
-    dev: f.dev,
-    ino: f.ino,
+    dev: toStoredId(f.dev),
+    ino: toStoredId(f.ino),
     path: f.path,
     projectDir: f.projectDir,
     sessionId: f.sessionId,
@@ -82,13 +93,19 @@ export function upsertSourceFile(db: Db, f: SourceFileInput): number {
   return row.id;
 }
 
-export function getSourceFile(db: Db, dev: number, ino: number): SourceFileRow | undefined {
-  const r = stmt(db, 'SELECT * FROM source_files WHERE dev = ? AND ino = ?').get(dev, ino) as Row | undefined;
+// Every column except dev and ino, which are read as text (see toStoredId).
+const SOURCE_FILE_COLUMNS = `id, path, project_dir, session_id, agent_id, is_subagent, size, mtime_ms, byte_offset, lines_read, head_hash,
+  status, first_seen_at, last_ingested_at, deleted_detected_at, CAST(dev AS TEXT) AS dev_text, CAST(ino AS TEXT) AS ino_text`;
+
+export function getSourceFile(db: Db, dev: bigint, ino: bigint): SourceFileRow | undefined {
+  const r = stmt(db, `SELECT ${SOURCE_FILE_COLUMNS} FROM source_files WHERE dev = ? AND ino = ?`).get(toStoredId(dev), toStoredId(ino)) as
+    | Row
+    | undefined;
   if (r === undefined) return undefined;
   return {
     id: r['id'] as number,
-    dev: r['dev'] as number,
-    ino: r['ino'] as number,
+    dev: fromStoredId(r['dev_text'] as string),
+    ino: fromStoredId(r['ino_text'] as string),
     path: r['path'] as string,
     projectDir: r['project_dir'] as string,
     sessionId: r['session_id'] as string,
@@ -124,8 +141,14 @@ export function setOffset(
 }
 
 // Active rows, for deletion marking.
-export function listActiveSourceFiles(db: Db): Array<{ id: number; dev: number; ino: number; path: string }> {
-  return stmt(db, "SELECT id, dev, ino, path FROM source_files WHERE status = 'active'").all() as Array<{ id: number; dev: number; ino: number; path: string }>;
+export function listActiveSourceFiles(db: Db): Array<{ id: number; dev: bigint; ino: bigint; path: string }> {
+  const rows = stmt(db, "SELECT id, CAST(dev AS TEXT) AS dev_text, CAST(ino AS TEXT) AS ino_text, path FROM source_files WHERE status = 'active'").all() as Array<{
+    id: number;
+    dev_text: string;
+    ino_text: string;
+    path: string;
+  }>;
+  return rows.map((r) => ({ id: r.id, dev: fromStoredId(r.dev_text), ino: fromStoredId(r.ino_text), path: r.path }));
 }
 
 export function markDeleted(db: Db, id: number, at: number): void {
@@ -275,10 +298,11 @@ export function upsertCostSnapshot(db: Db, f: CostSnapshotFact, sourceFileId: nu
 
 // ---------------------------------------------------------------- sessions and projects
 
+// `key` is the stored project key (already normalised), `cwd` the raw working folder of the event.
 function projectName(key: string, cwd: string | null, projectDir: string): string {
-  const base = cwd !== null ? basename(cwd) : '';
+  const base = cwd !== null ? projectLabelOf(cwd) : '';
   if (base !== '') return base;
-  return cwd !== null && cwd !== '' ? cwd : projectDir !== '' ? projectDir : key;
+  return cwd !== null && cwd !== '' ? key : projectDir !== '' ? projectDir : key;
 }
 
 function ensureProject(db: Db, key: string, cwd: string | null, projectDir: string, at: number): void {
@@ -318,9 +342,11 @@ export function upsertSession(db: Db, f: LineMeta, projectDir: string, at: numbe
   }
   const cur = stmt(db, 'SELECT * FROM sessions WHERE session_id = ?').get(f.sessionId) as Row | undefined;
   const fallback = `dir:${projectDir}`;
+  // The key of the event's cwd: Windows style paths are normalised (see projectKey.ts), all others stay exactly as written.
+  const cwdKey = f.cwd !== null ? projectKeyOf(f.cwd) : null;
 
   if (cur === undefined) {
-    const key = f.cwd ?? fallback;
+    const key = cwdKey ?? fallback;
     ensureProject(db, key, f.cwd, projectDir, at);
     stmt(
       db,
@@ -337,10 +363,10 @@ export function upsertSession(db: Db, f: LineMeta, projectDir: string, at: numbe
   const lastTs = cur['last_ts'] as number;
   let projectKey = cur['project_key'] as string;
   let projectTs = cur['project_ts'] as number | null;
-  if (f.cwd !== null) {
-    const takes = projectTs === null || f.ts < projectTs || (f.ts === projectTs && f.cwd < projectKey);
+  if (cwdKey !== null) {
+    const takes = projectTs === null || f.ts < projectTs || (f.ts === projectTs && cwdKey < projectKey);
     if (takes) {
-      projectKey = f.cwd;
+      projectKey = cwdKey;
       projectTs = f.ts;
     }
   }

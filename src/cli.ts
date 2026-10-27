@@ -17,6 +17,8 @@ import { openAndMigrate } from './store/migrate.ts';
 import { cmdDoctor } from './cli/doctor.ts';
 import { cmdExport } from './cli/export.ts';
 import { cmdInstall, cmdUninstall } from './cli/launchagent.ts';
+import { cmdWinInstall, cmdWinUninstall } from './cli/winstartup.ts';
+import { currentOs } from './config/platform.ts';
 
 const COMMANDS: Array<[string, string]> = [
   ['serve', 'start the local dashboard and background sync (--root <dir> adds a folder; LEDGER_PORT and LEDGER_TZ change the port and time zone)'],
@@ -25,12 +27,12 @@ const COMMANDS: Array<[string, string]> = [
   ['verify', 'check the archive against the source files'],
   ['doctor', 'print diagnostics about paths, data and versions'],
   ['export', 'write the archive to a file you choose'],
-  ['install', 'start the ledger at login with a LaunchAgent'],
-  ['uninstall', 'remove the LaunchAgent (the archive is kept unless you ask)'],
+  ['install', 'start the ledger at login'],
+  ['uninstall', 'remove the start at login entry (the archive is kept unless you ask)'],
 ];
 
 function help(): string {
-  const lines = ['Usage Ledger: Claude Code usage analytics for this Mac', '', 'Usage: node src/cli.ts <command>', '', 'Commands:'];
+  const lines = ['Usage Ledger: Claude Code usage analytics for this computer', '', 'Usage: node src/cli.ts <command>', '', 'Commands:'];
   for (const [name, desc] of COMMANDS) lines.push(`  ${name.padEnd(15)}${desc}`);
   lines.push('  --help         show this list');
   return lines.join('\n');
@@ -330,8 +332,16 @@ async function main(argv: string[]): Promise<number> {
   if (first === 'verify') return cmdVerify();
   if (first === 'doctor') return cmdDoctor(argv.slice(1));
   if (first === 'export') return cmdExport(argv.slice(1));
-  if (first === 'install') return cmdInstall(argv.slice(1));
-  return cmdUninstall(argv.slice(1));
+  // Start at login: a Task Scheduler task on Windows, the LaunchAgent on macOS. Any other system gets a plain sentence.
+  let windows: boolean;
+  try {
+    windows = currentOs() === 'win32';
+  } catch (err) {
+    console.error(err instanceof Error ? err.message : String(err));
+    return 1;
+  }
+  if (first === 'install') return windows ? cmdWinInstall(argv.slice(1)) : cmdInstall(argv.slice(1));
+  return windows ? cmdWinUninstall(argv.slice(1)) : cmdUninstall(argv.slice(1));
 }
 
 process.exitCode = await main(process.argv.slice(2));

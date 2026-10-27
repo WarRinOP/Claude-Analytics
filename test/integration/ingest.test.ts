@@ -8,9 +8,9 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { runIngest, type IngestOptions } from '../../src/ingest/ingest.ts';
 import { acquireLock, LockHeldError, lockPath } from '../../src/ingest/lock.ts';
 import type { Db } from '../../src/store/db.ts';
-import { openAndMigrate } from '../../src/store/migrate.ts';
 import { put, usageLine, userLine } from '../unit/ingestHelpers.ts';
-import { dump, useTempDataDir, type TempEnv } from '../unit/storeHelpers.ts';
+import { dump, openAndMigrate, SOURCE_FILES_DUMP_SQL, useTempDataDir, type TempEnv } from '../unit/storeHelpers.ts';
+import { removeTemp } from '../unit/helpers.ts';
 
 const here = dirname(fileURLToPath(import.meta.url));
 const CLI = join(here, '..', '..', 'src', 'cli.ts');
@@ -24,7 +24,7 @@ beforeEach(() => {
 });
 afterEach(() => {
   env.restore();
-  rmSync(work, { recursive: true, force: true });
+  removeTemp(work);
 });
 
 // ---------------------------------------------------------------- synthetic transcripts
@@ -106,7 +106,7 @@ function everything(db: Db): string[] {
     ...factsDump(db),
     ...COUNTER_SQL.map((q) => dump(db, q)),
     dump(db, 'SELECT * FROM project_aliases ORDER BY alias_dir'),
-    dump(db, 'SELECT * FROM source_files ORDER BY id'),
+    dump(db, SOURCE_FILES_DUMP_SQL),
   ];
 }
 

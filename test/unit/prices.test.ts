@@ -1,4 +1,4 @@
-// Plan 15.2: the price table and the rules, with hand computed expectations in nano dollars.
+// The price table and the rules, with hand computed expectations in nano dollars.
 import { describe, expect, it } from 'vitest';
 import { PRICE_TABLE, PRICE_TABLE_DATE, PRICE_TABLE_VERSION, cacheWriteRemainder, isPricedModel, nanosToUsd, priceEventNanos, type PricedEvent } from '../../src/metrics/prices.ts';
 

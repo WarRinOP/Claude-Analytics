@@ -1,14 +1,43 @@
-import { mkdirSync, mkdtempSync, realpathSync, rmSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, realpathSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import type { MessageFact, UsageFact } from '../../src/ingest/facts.ts';
-import type { Db } from '../../src/store/db.ts';
-import { openAndMigrate } from '../../src/store/migrate.ts';
+import { openDb as openDbRaw, type Db } from '../../src/store/db.ts';
+import { openAndMigrate as openAndMigrateRaw, type MigrateOptions, type MigrateResult } from '../../src/store/migrate.ts';
 import { upsertSourceFile } from '../../src/store/repo.ts';
+import { removeTemp } from './helpers.ts';
 
 export interface TempEnv {
   dir: string;
   restore: () => void;
+}
+
+// Every database a test opens through these wrappers is remembered and closed before its temp folder is removed,
+// because Windows cannot delete a folder that holds an open database (or its -wal and -shm files).
+const opened: Db[] = [];
+
+// Test databases skip the disk sync on commit. Windows syncs on every commit and macOS does not really, so a test that
+// commits dozens of times was the slow one there (repo order independence, partial). The tests check what is written,
+// never what survives a power cut; the production setting in src/store/db.ts is unchanged.
+function fast(db: Db): Db {
+  db.exec('PRAGMA synchronous = OFF');
+  opened.push(db);
+  return db;
+}
+
+export function openDb(path: string): Db {
+  return fast(openDbRaw(path));
+}
+
+export function openAndMigrate(path: string, opts?: MigrateOptions): { db: Db; result: MigrateResult } {
+  const r = openAndMigrateRaw(path, opts);
+  fast(r.db);
+  return r;
+}
+
+// Closes every database still open. A database the test already closed is skipped.
+export function closeTracked(): void {
+  for (const db of opened.splice(0)) if (db.isOpen) db.close();
 }
 
 // Points LEDGER_DATA_DIR at a fresh folder under the real temp dir.
@@ -22,7 +51,8 @@ export function useTempDataDir(): TempEnv {
     restore: () => {
       if (saved === undefined) delete process.env['LEDGER_DATA_DIR'];
       else process.env['LEDGER_DATA_DIR'] = saved;
-      rmSync(join(dir, '..'), { recursive: true, force: true });
+      closeTracked();
+      removeTemp(join(dir, '..'));
     },
   };
 }
@@ -34,8 +64,8 @@ export function freshDb(dir: string): { db: Db; mainFile: number; subFile: numbe
   counter += 1;
   const { db } = openAndMigrate(join(dir, `ledger-${counter}.db`));
   const base = { projectDir: '-work-demo', sessionId: 's1', size: 1, mtimeMs: 1, now: 1 };
-  const mainFile = upsertSourceFile(db, { ...base, dev: 1, ino: 1, path: '/src/main.jsonl', agentId: null, isSubagent: false });
-  const subFile = upsertSourceFile(db, { ...base, dev: 1, ino: 2, path: '/src/agent-a.jsonl', agentId: 'a', isSubagent: true });
+  const mainFile = upsertSourceFile(db, { ...base, dev: 1n, ino: 1n, path: '/src/main.jsonl', agentId: null, isSubagent: false });
+  const subFile = upsertSourceFile(db, { ...base, dev: 1n, ino: 2n, path: '/src/agent-a.jsonl', agentId: 'a', isSubagent: true });
   return { db, mainFile, subFile };
 }
 
@@ -89,6 +119,12 @@ export function message(over: Partial<MessageFact> = {}): MessageFact {
     ...over,
   };
 }
+
+// All columns of source_files in a form JSON can hold: dev and ino as exact decimal text (a number read from SQLite throws
+// above 2^53, and NTFS file ids are 64 bit).
+export const SOURCE_FILES_DUMP_SQL =
+  'SELECT id, CAST(dev AS TEXT) AS dev, CAST(ino AS TEXT) AS ino, path, project_dir, session_id, agent_id, is_subagent, size, mtime_ms, ' +
+  'byte_offset, lines_read, head_hash, status, first_seen_at, last_ingested_at, deleted_detected_at FROM source_files ORDER BY id';
 
 export function dump(db: Db, sql: string): string {
   return JSON.stringify(db.prepare(sql).all());

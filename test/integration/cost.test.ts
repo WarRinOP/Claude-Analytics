@@ -9,11 +9,9 @@ import { afterPass, ensureRollups, rebuildAll, refreshDays, resolvePromptModels,
 import { dayBounds } from '../../src/metrics/time.ts';
 import { META_PRICE_VERSION, ensureCosts, recomputeAllCosts } from '../../src/store/costs.ts';
 import type { Db } from '../../src/store/db.ts';
-import { openDb } from '../../src/store/db.ts';
-import { openAndMigrate } from '../../src/store/migrate.ts';
 import { upsertCostSnapshot, upsertUsage } from '../../src/store/repo.ts';
 import { HOUR, MIN, seeder, type Seeder } from '../unit/metricsHelpers.ts';
-import { dump, freshDb, rng, shuffled, useTempDataDir, usage, type TempEnv } from '../unit/storeHelpers.ts';
+import { dump, freshDb, openAndMigrate, openDb, rng, shuffled, usage, useTempDataDir, type TempEnv } from '../unit/storeHelpers.ts';
 
 let env: TempEnv;
 beforeEach(() => {

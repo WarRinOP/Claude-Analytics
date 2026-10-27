@@ -210,10 +210,16 @@ test.describe('the ledger on screen equals the API', () => {
     await expect(page.locator('tr[data-row="model"]')).toHaveCount(0);
     expect(await page.locator('[data-toggle][aria-expanded="true"]').count()).toBe(0);
     await expect(page.getByTestId('breakdown-collapse')).toHaveAttribute('aria-disabled', 'true');
-    // the choice belongs to the view: weekly keeps its own
+    // The choice belongs to the view: an untouched weekly view opens at its own default (the newest week), and monthly
+    // stays collapsed when it comes back. Each check waits for that view's fresh answer, not the stale previous one.
+    const week = await bd('week');
     await page.locator('[data-bar="breakdown"] .seg__btn[data-period="week"]').click();
-    await expect(page.locator('tbody[data-group="day"]')).toHaveCount(0);
+    await expect(table(page)).toHaveAttribute('data-period', 'week');
+    await expect(table(page)).not.toHaveAttribute('data-stale', 'true');
+    await expect(page.locator('tbody[data-group="day"]')).toHaveCount((week.rows[0] as BreakdownRow).days.length);
     await page.locator('[data-bar="breakdown"] .seg__btn[data-period="month"]').click();
+    await expect(table(page)).toHaveAttribute('data-period', 'month');
+    await expect(table(page)).not.toHaveAttribute('data-stale', 'true');
     await expect(page.locator('tbody[data-group="day"]')).toHaveCount(0); // still collapsed
   });
 

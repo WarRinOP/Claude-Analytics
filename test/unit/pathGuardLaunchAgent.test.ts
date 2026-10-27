@@ -3,6 +3,10 @@ import { homedir, tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { LAUNCH_AGENT_FILE, assertLaunchAgentPlistPath, launchAgentPlistPath, launchAgentsDir } from '../../src/config/pathGuard.ts';
+import { removeTemp } from './helpers.ts';
+
+// ~/Library exists only on macOS. Windows has its own tests for its start at login code.
+const mac = process.platform === 'darwin';
 
 let base: string;
 let agents: string;
@@ -11,10 +15,10 @@ beforeEach(() => {
   agents = join(base, 'LaunchAgents');
   mkdirSync(agents);
 });
-afterEach(() => rmSync(base, { recursive: true, force: true }));
+afterEach(() => removeTemp(base));
 
 describe('assertLaunchAgentPlistPath', () => {
-  it('names exactly one file in the real LaunchAgents folder by default', () => {
+  it.runIf(mac)('names exactly one file in the real LaunchAgents folder by default', () => {
     expect(launchAgentsDir()).toBe(join(homedir(), 'Library', 'LaunchAgents'));
     expect(LAUNCH_AGENT_FILE).toBe('com.usageledger.agent.plist');
     const want = join(realpathSync(join(homedir(), 'Library')), 'LaunchAgents', LAUNCH_AGENT_FILE);

@@ -3,7 +3,8 @@
 // Every trigger runs a full reconcile pass over all roots. The watcher and the poll only decide WHEN to run,
 // never what to read. Passes never overlap: a trigger that arrives during a pass sets one flag, and exactly one
 // more pass runs after it. A failing pass is reported and the next trigger tries again. Nothing here throws
-// into the process.
+// into the process. A watcher that cannot start or breaks is reported once per outage and retried quietly (a missing
+// transcript folder, for example on a machine where Claude Code has not run yet, must not fill the log); the poll keeps running.
 import { watch as fsWatch } from 'node:fs';
 import { runIngest, type IngestOptions, type RunSummary } from './ingest.ts';
 import type { Db } from '../store/db.ts';
@@ -101,6 +102,9 @@ export function createSync(opts: SyncOptions): Sync {
   let retryTimer: unknown = null;
   let watcher: WatchHandle | null = null;
   let backoff = BACKOFF_START_MS;
+  // The watcher problem already reported. The same problem on the next retry is not reported again; a watcher that starts
+  // clears it, so the next outage is reported once more.
+  let reportedWatchProblem: string | null = null;
 
   const report = (err: unknown): void => {
     try {
@@ -109,6 +113,14 @@ export function createSync(opts: SyncOptions): Sync {
       // a broken callback must not break the loop
     }
   };
+
+  function watcherProblem(err: unknown): void {
+    const text = describe(err);
+    lastError = `watcher: ${text}`;
+    if (text === reportedWatchProblem) return;
+    reportedWatchProblem = text;
+    report(err);
+  }
 
   async function onePass(reason: TriggerReason): Promise<void> {
     try {
@@ -201,17 +213,16 @@ export function createSync(opts: SyncOptions): Sync {
         } catch {
           // already closed
         }
-        lastError = `watcher: ${describe(err)}`;
-        report(err);
+        watcherProblem(err);
         scheduleRetry();
       });
       watcher = handle;
+      reportedWatchProblem = null;
       // Changes may have been missed while the watcher was down.
       if (afterFailure) openWindow();
     } catch (err) {
       watcher = null;
-      lastError = `watcher: ${describe(err)}`;
-      report(err);
+      watcherProblem(err);
       scheduleRetry();
     }
   }

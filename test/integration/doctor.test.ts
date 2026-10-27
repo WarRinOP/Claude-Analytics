@@ -6,9 +6,9 @@ import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import type { Health } from '../../src/api/types.ts';
 import { renderDoctor } from '../../src/cli/doctor.ts';
-import { openAndMigrate } from '../../src/store/migrate.ts';
 import { put, usageLine, userLine } from '../unit/ingestHelpers.ts';
-import { useTempDataDir, type TempEnv } from '../unit/storeHelpers.ts';
+import { openAndMigrate, useTempDataDir, type TempEnv } from '../unit/storeHelpers.ts';
+import { removeTemp } from '../unit/helpers.ts';
 
 const ROOT = join(import.meta.dirname, '..', '..');
 const SID = 'aaaaaaaa-0000-0000-0000-00000000000a';
@@ -25,7 +25,7 @@ beforeEach(() => {
 });
 afterEach(() => {
   env.restore();
-  rmSync(work, { recursive: true, force: true });
+  removeTemp(work);
 });
 
 function run(command: string, args: string[] = []): { code: number | null; out: string; err: string } {

@@ -1,17 +1,33 @@
 // pnpm verify: lint, typecheck (server, web, e2e), unit and integration tests, web build, end to end tests, audit.
 // Compact output (under 30 lines), nonzero exit on failure.
-import { spawnSync } from 'node:child_process';
+import { spawnSync, type SpawnSyncReturns } from 'node:child_process';
 import { mkdtempSync, readFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join, relative } from 'node:path';
+import { dirname, join, relative } from 'node:path';
 
 const root = process.cwd();
-const bin = (name: string) => join(root, 'node_modules', '.bin', name);
+
+// The JavaScript entry of a tool, from its package's `bin` field. Tools are started as `node <entry>` so that no
+// `.cmd` launcher (which Node refuses to spawn without a shell on Windows) and no `node_modules/.bin` shim is needed.
+function entry(pkg: string, binName: string): string {
+  const pkgJson = join(root, 'node_modules', pkg, 'package.json');
+  const meta = JSON.parse(readFileSync(pkgJson, 'utf8')) as { bin?: string | Record<string, string> };
+  const rel = typeof meta.bin === 'string' ? meta.bin : meta.bin?.[binName];
+  if (rel === undefined) throw new Error(`${pkg} has no bin entry named ${binName}`);
+  return join(dirname(pkgJson), rel);
+}
+const tool = {
+  eslint: entry('eslint', 'eslint'),
+  tsc: entry('typescript', 'tsc'),
+  vitest: entry('vitest', 'vitest'),
+  vite: entry('vite', 'vite'),
+  playwright: entry('@playwright/test', 'playwright'),
+};
 const out: string[] = [];
 let failed = false;
 
-function run(cmd: string, args: string[]) {
-  const r = spawnSync(cmd, args, { cwd: root, encoding: 'utf8', maxBuffer: 64 * 1024 * 1024 });
+function run(script: string, args: string[]) {
+  const r = spawnSync(process.execPath, [script, ...args], { cwd: root, encoding: 'utf8', maxBuffer: 64 * 1024 * 1024 });
   return { code: r.status ?? 1, text: `${r.stdout ?? ''}\n${r.stderr ?? ''}`, spawnError: r.error };
 }
 
@@ -25,7 +41,7 @@ const short = (s: string, n = 110) => (s.length > n ? s.slice(0, n - 3) + '...' 
 
 // lint
 {
-  const r = run(bin('eslint'), ['.', '--format', 'json']);
+  const r = run(tool.eslint, ['.', '--format', 'json']);
   let problems: string[] = [];
   let parsed = false;
   try {
@@ -51,7 +67,7 @@ const short = (s: string, n = 110) => (s.length > n ? s.slice(0, n - 3) + '...' 
   const errs: string[] = [];
   let bad = false;
   for (const args of [[], ['-p', 'web/tsconfig.json'], ['-p', 'test/e2e/tsconfig.json']]) {
-    const r = run(bin('tsc'), ['--noEmit', '--pretty', 'false', ...args]);
+    const r = run(tool.tsc, ['--noEmit', '--pretty', 'false', ...args]);
     const found = r.text.split('\n').filter((l) => /\(\d+,\d+\): error TS/.test(l));
     errs.push(...found);
     if (r.code !== 0) {
@@ -67,7 +83,7 @@ const short = (s: string, n = 110) => (s.length > n ? s.slice(0, n - 3) + '...' 
 {
   const dir = mkdtempSync(join(tmpdir(), 'verify-'));
   const file = join(dir, 'vitest.json');
-  const r = run(bin('vitest'), ['run', '--reporter=json', `--outputFile=${file}`]);
+  const r = run(tool.vitest, ['run', '--reporter=json', `--outputFile=${file}`]);
   try {
     const j = JSON.parse(readFileSync(file, 'utf8')) as {
       numPassedTests: number;
@@ -103,7 +119,7 @@ const short = (s: string, n = 110) => (s.length > n ? s.slice(0, n - 3) + '...' 
 // build the dashboard (web/dist)
 let built = false;
 {
-  const r = run(bin('vite'), ['build', '--config', 'web/vite.config.ts']);
+  const r = run(tool.vite, ['build', '--config', 'web/vite.config.ts']);
   if (r.code === 0) {
     built = true;
     out.push('build:web: ok');
@@ -115,7 +131,7 @@ if (!built) fail('e2e: FAIL (skipped, the web build failed)', []);
 else {
   const dir = mkdtempSync(join(tmpdir(), 'verify-e2e-'));
   const file = join(dir, 'report.json');
-  const r = spawnSync(bin('playwright'), ['test', '--reporter=json'], {
+  const r = spawnSync(process.execPath, [tool.playwright, 'test', '--reporter=json'], {
     cwd: root,
     encoding: 'utf8',
     maxBuffer: 64 * 1024 * 1024,
@@ -154,11 +170,42 @@ else {
 
 // audit
 {
-  const r = run('pnpm', ['audit', '--prod']);
-  const offline = /ENOTFOUND|ECONNREFUSED|ECONNRESET|ETIMEDOUT|EAI_AGAIN|fetch failed|network|offline|getaddrinfo/i.test(r.text);
-  if (r.code === 0) out.push('audit: ok');
+  // How to start pnpm. When pnpm runs this script it sets npm_execpath to itself: a JavaScript entry (start it with node),
+  // or a native launcher (start it directly). Neither needs a shell. Only when that is missing is `pnpm` looked up by name:
+  // on Windows that is a `.cmd` file, which Node refuses to start without a shell, so only there the constant command
+  // `pnpm audit --prod` goes through the shell. Nothing from the environment is put into that command.
+  const self = process.env['npm_execpath'] ?? '';
+  const opts = { cwd: root, encoding: 'utf8' as const, maxBuffer: 64 * 1024 * 1024 };
+  let how: string;
+  let x: SpawnSyncReturns<string>;
+  if (/pnpm/i.test(self) && /\.[cm]?js$/.test(self)) {
+    how = `node ${self}`;
+    x = spawnSync(process.execPath, [self, 'audit', '--prod'], opts);
+  } else if (/pnpm/i.test(self) && !/\.(cmd|bat)$/i.test(self)) {
+    how = self;
+    x = spawnSync(self, ['audit', '--prod'], opts);
+  } else if (process.platform === 'win32') {
+    how = 'shell: pnpm audit --prod';
+    x = spawnSync('pnpm audit --prod', { ...opts, shell: true });
+  } else {
+    how = 'pnpm';
+    x = spawnSync('pnpm', ['audit', '--prod'], opts);
+  }
+  const text = `${x.stdout ?? ''}\n${x.stderr ?? ''}`;
+  const code = x.status ?? 1;
+  const offline = /ENOTFOUND|ECONNREFUSED|ECONNRESET|ETIMEDOUT|EAI_AGAIN|fetch failed|network|offline|getaddrinfo/i.test(text);
+  if (code === 0) out.push('audit: ok');
   else if (offline) out.push('audit: skipped (offline)');
-  else fail('audit: FAIL', r.text.trim().split('\n').slice(0, 3).map((l) => '  ' + short(l)));
+  else {
+    // Never an empty reason: the spawn error, the exit status or signal, then the last lines of output.
+    const lines = text.split('\n').map((l) => l.trim()).filter((l) => l !== '');
+    const why = [
+      ...(x.error !== undefined ? [`spawn error: ${x.error.message}`] : []),
+      `started as: ${how}; exit status ${x.status === null ? 'none' : x.status}${x.signal !== null ? `, signal ${x.signal}` : ''}`,
+      ...lines.slice(-3),
+    ];
+    fail('audit: FAIL', why.map((l) => '  ' + short(l)));
+  }
 }
 
 out.push(failed ? 'verify: FAIL' : 'verify: ok');

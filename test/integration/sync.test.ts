@@ -7,9 +7,9 @@ import { logsDir } from '../../src/config/paths.ts';
 import { runIngest, type IngestOptions, type RunSummary } from '../../src/ingest/ingest.ts';
 import { createSync, type SyncOptions, type SyncTimers, type WatchFactory } from '../../src/ingest/scheduler.ts';
 import type { Db } from '../../src/store/db.ts';
-import { openAndMigrate } from '../../src/store/migrate.ts';
 import { put, usageLine, userLine } from '../unit/ingestHelpers.ts';
-import { dump, useTempDataDir, type TempEnv } from '../unit/storeHelpers.ts';
+import { dump, openAndMigrate, useTempDataDir, type TempEnv } from '../unit/storeHelpers.ts';
+import { removeTemp, unixModes } from '../unit/helpers.ts';
 
 let env: TempEnv;
 let work: string;
@@ -20,7 +20,7 @@ beforeEach(() => {
 });
 afterEach(() => {
   env.restore();
-  rmSync(work, { recursive: true, force: true });
+  removeTemp(work);
 });
 
 const SID_A = 'aaaaaaaa-0000-0000-0000-000000000001';
@@ -142,8 +142,11 @@ describe('deletion marking', () => {
 
 // ---------------------------------------------------------------- unreadable file
 
+// Windows cannot make a file unreadable with chmod (it only toggles the read only bit), so these two cases run elsewhere.
+const unreadableFiles = it.skipIf(process.platform === 'win32');
+
 describe('unreadable file', () => {
-  it('is one recorded error, the other files are still ingested, and a repeat adds no row', async () => {
+  unreadableFiles('is one recorded error, the other files are still ingested, and a repeat adds no row', async () => {
     if (process.getuid?.() === 0) return;
     const root = join(work, 'projects');
     put(pathA(root), stream(SID_A, 1, 3));
@@ -171,7 +174,7 @@ describe('unreadable file', () => {
     }
   });
 
-  it('an unreadable file that was read before keeps its rows and gets one error row', async () => {
+  unreadableFiles('an unreadable file that was read before keeps its rows and gets one error row', async () => {
     if (process.getuid?.() === 0) return;
     const root = join(work, 'projects');
     put(pathA(root), stream(SID_A, 1, 3));
@@ -293,8 +296,11 @@ function fakeTimers(): FakeTimers {
 
 const tick = (): Promise<void> => new Promise((r) => setImmediate(r));
 
+// Waits for a pass to finish. The limit is time, not a count of ticks: a pass reads real files, and a count of
+// setImmediate ticks can run out in a few milliseconds while a slow file system (Windows) is still answering.
 async function idle(s: { status(): { running: boolean } }): Promise<void> {
-  for (let i = 0; i < 5000; i++) {
+  const until = Date.now() + 20_000;
+  while (Date.now() < until) {
     await tick();
     if (!s.status().running) {
       await tick();
@@ -491,8 +497,72 @@ describe('watcher', () => {
     expect(attemptAt.slice(0, 8)).toEqual([0, 1000, 3000, 7000, 15000, 31000, 63000, 123000]);
     expect(sync.status().watcherAlive).toBe(false);
     expect(sync.status().lastError).toContain('watcher');
-    expect(errors.length).toBeGreaterThan(5);
+    // The same problem on every retry is reported once, not on each of the dozens of retries.
+    expect(attemptAt.length).toBeGreaterThan(5);
+    expect(errors).toHaveLength(1);
     expect(triggers.filter((t) => t === 'poll').length).toBeGreaterThanOrEqual(5);
+    await sync.stop();
+  });
+
+  it('a watcher that never could start (the folder is missing) is reported once and retried quietly, and the poll still runs', async () => {
+    const db = openDb();
+    const ft = fakeTimers();
+    const triggers: string[] = [];
+    const errors: string[] = [];
+    const sync = createSync({
+      db,
+      roots: [join(work, 'no-such-folder')],
+      timers: ft.timers,
+      onError: (e) => errors.push((e as Error).message),
+      watchFactory: () => {
+        throw Object.assign(new Error("ENOENT: no such file or directory, watch 'x'"), { code: 'ENOENT' });
+      },
+      ingest: async (_db, o) => {
+        triggers.push(o.trigger);
+        return summary(o.trigger);
+      },
+    });
+    await sync.start();
+    for (let i = 0; i < 300; i++) {
+      ft.advance(1000);
+      if (i % 20 === 0) await idle(sync);
+    }
+    await idle(sync);
+    expect(errors).toHaveLength(1);
+    expect(sync.status().watcherAlive).toBe(false);
+    expect(triggers.filter((t) => t === 'poll').length).toBeGreaterThanOrEqual(4);
+    await sync.stop();
+  });
+
+  it('a new outage after the watcher worked is reported again, once', async () => {
+    const db = openDb();
+    const ft = fakeTimers();
+    const errors: string[] = [];
+    let healthy = false;
+    const live = fakeWatcher();
+    const sync = createSync({
+      db,
+      roots: [work],
+      timers: ft.timers,
+      onError: (e) => errors.push((e as Error).message),
+      watchFactory: (root, onEvent, onFail) => {
+        if (!healthy) throw new Error('first outage');
+        return live.factory(root, onEvent, onFail);
+      },
+      ingest: async (_db, o) => summary(o.trigger),
+    });
+    await sync.start();
+    ft.advance(10_000);
+    expect(errors).toEqual(['first outage']);
+    healthy = true;
+    ft.advance(60_000);
+    expect(sync.status().watcherAlive).toBe(true);
+    // the watcher worked, so a failure with the very same text is a new outage
+    live.fail(new Error('first outage'));
+    expect(sync.status().watcherAlive).toBe(false);
+    ft.advance(60_000);
+    expect(sync.status().watcherAlive).toBe(true);
+    expect(errors).toEqual(['first outage', 'first outage']);
     await sync.stop();
   });
 
@@ -699,10 +769,10 @@ describe('log', () => {
     expect(names).toEqual(['ledger.log', 'ledger.log.1', 'ledger.log.2']);
     for (const n of names) {
       const st = statSync(join(logsDir(), n));
-      expect(st.mode & 0o777).toBe(0o600);
+      if (unixModes) expect(st.mode & 0o777).toBe(0o600);
       expect(st.size).toBeLessThanOrEqual(300);
     }
-    expect(statSync(logsDir()).mode & 0o777).toBe(0o700);
+    if (unixModes) expect(statSync(logsDir()).mode & 0o777).toBe(0o700);
     expect(logFilePath()).toBe(join(logsDir(), 'ledger.log'));
   });
 

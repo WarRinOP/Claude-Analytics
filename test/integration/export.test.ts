@@ -1,5 +1,5 @@
 import { spawnSync } from 'node:child_process';
-import { existsSync, mkdtempSync, readFileSync, readdirSync, realpathSync, renameSync, rmSync, statSync } from 'node:fs';
+import { existsSync, mkdtempSync, readFileSync, readdirSync, realpathSync, renameSync, statSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
@@ -9,6 +9,7 @@ import { rebuildAll, resolvePromptModels, setMeta } from '../../src/metrics/roll
 import { dayBounds } from '../../src/metrics/time.ts';
 import { HOUR, MIN, seeder, type Seeder } from '../unit/metricsHelpers.ts';
 import { useTempDataDir, type TempEnv } from '../unit/storeHelpers.ts';
+import { removeTemp, unixModes } from '../unit/helpers.ts';
 
 const ROOT = join(import.meta.dirname, '..', '..');
 const DHAKA = 'Asia/Dhaka';
@@ -22,7 +23,7 @@ beforeEach(() => {
 });
 afterEach(() => {
   env.restore();
-  rmSync(work, { recursive: true, force: true });
+  removeTemp(work);
 });
 
 // Minimal RFC 4180 reader for the checks below.
@@ -254,7 +255,7 @@ describe('export --csv', () => {
     const sess = readFileSync(join(base, stamp as string, 'sessions.csv'), 'utf8');
     expect(daily).toBe(run(['--stdout', 'daily', ...args]).out);
     expect(sess).toBe(run(['--stdout', 'sessions', ...args]).out);
-    expect(statSync(join(base, stamp as string, 'daily.csv')).mode & 0o777).toBe(0o600);
+    if (unixModes) expect(statSync(join(base, stamp as string, 'daily.csv')).mode & 0o777).toBe(0o600);
     // nothing else was written beside the archive and the exports
     expect(readdirSync(env.dir).sort()).toEqual(expect.arrayContaining(['exports', 'ledger.db']));
     expect(readdirSync(work)).toEqual([]);

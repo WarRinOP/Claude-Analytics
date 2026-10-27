@@ -1,8 +1,9 @@
 // Incremental reader: decides what to read from a known file and reads only new complete lines.
-// Source files are opened read only and without following a final symlink. Nothing here writes.
+// Source files are opened read only and without following a final symlink (O_NOFOLLOW where the system has it, and on
+// every system an lstat before the open and an identity check of the open handle after it). Nothing here writes.
 import { createHash } from 'node:crypto';
-import { constants } from 'node:fs';
-import { open, type FileHandle } from 'node:fs/promises';
+import { constants, type BigIntStats } from 'node:fs';
+import { lstat, open, type FileHandle } from 'node:fs/promises';
 import type { SourceFileRow } from '../store/repo.ts';
 import type { DiscoveredFile } from './discover.ts';
 
@@ -17,17 +18,82 @@ export function headLength(byteOffset: number): number {
   return Math.min(HEAD_BYTES, Math.max(0, byteOffset));
 }
 
-// SHA 256 hex of the first `length` bytes of the file. Fewer bytes are hashed if the file is shorter
-// (the result then differs from a stored hash, which is the right outcome). Returns null when the
-// file cannot be opened because it is gone or is now a symlink; other errors are thrown.
-export async function headHash(path: string, length: number): Promise<string | null> {
-  let fh: FileHandle;
+// O_NOFOLLOW does not exist on Windows; there the lstat and the handle check below carry the rule alone.
+const NOFOLLOW: number = (constants as Record<string, number | undefined>)['O_NOFOLLOW'] ?? 0;
+
+// A file Windows holds locked (an antivirus scan, Claude Code writing) can refuse an open for a moment.
+const LOCKED_CODES = new Set(['EBUSY', 'EPERM', 'EACCES']);
+export const OPEN_RETRIES = 3;
+export const OPEN_RETRY_MS = 50;
+
+// The system calls the open uses. Tests replace them to simulate a locked file or a swapped path.
+export interface OpenDeps {
+  lstat: (path: string) => Promise<Pick<BigIntStats, 'dev' | 'ino' | 'isSymbolicLink'>>;
+  open: (path: string, flags: number) => Promise<FileHandle>;
+  sleep: (ms: number) => Promise<void>;
+}
+
+const realDeps: OpenDeps = {
+  lstat: (path) => lstat(path, { bigint: true }),
+  open: (path, flags) => open(path, flags),
+  sleep: (ms) => new Promise((resolve) => setTimeout(resolve, ms)),
+};
+
+function errCode(err: unknown): string | undefined {
+  return (err as NodeJS.ErrnoException | null)?.code;
+}
+
+function isGone(err: unknown): boolean {
+  const c = errCode(err);
+  // ELOOP: the path is now a symlink. It is never followed, so the file counts as gone.
+  return c === 'ENOENT' || c === 'ENOTDIR' || c === 'ELOOP';
+}
+
+// Opens `path` read only, never through a final symlink. Returns null when the file is gone, is a symlink, or is no longer
+// the file that was inspected (the handle's identity differs from the lstat made just before). A locked file is retried
+// OPEN_RETRIES times, OPEN_RETRY_MS apart, and then the last error is thrown. Other errors are thrown at once.
+export async function openNoFollow(path: string, deps: OpenDeps = realDeps): Promise<FileHandle | null> {
+  let before: Pick<BigIntStats, 'dev' | 'ino' | 'isSymbolicLink'>;
   try {
-    fh = await open(path, constants.O_RDONLY | constants.O_NOFOLLOW);
+    before = await deps.lstat(path);
   } catch (err) {
     if (isGone(err)) return null;
     throw err;
   }
+  if (before.isSymbolicLink()) return null;
+
+  let fh: FileHandle | undefined;
+  for (let attempt = 0; fh === undefined; attempt++) {
+    try {
+      fh = await deps.open(path, constants.O_RDONLY | NOFOLLOW);
+    } catch (err) {
+      if (isGone(err)) return null;
+      const c = errCode(err);
+      if (c === undefined || !LOCKED_CODES.has(c) || attempt >= OPEN_RETRIES) throw err;
+      await deps.sleep(OPEN_RETRY_MS);
+    }
+  }
+
+  let after: BigIntStats;
+  try {
+    after = await fh.stat({ bigint: true });
+  } catch (err) {
+    await fh.close();
+    throw err;
+  }
+  if (after.dev !== before.dev || after.ino !== before.ino) {
+    await fh.close();
+    return null;
+  }
+  return fh;
+}
+
+// SHA 256 hex of the first `length` bytes of the file. Fewer bytes are hashed if the file is shorter
+// (the result then differs from a stored hash, which is the right outcome). Returns null when the
+// file cannot be opened because it is gone or is now a symlink; other errors are thrown.
+export async function headHash(path: string, length: number, deps?: OpenDeps): Promise<string | null> {
+  const fh = await openNoFollow(path, deps);
+  if (fh === null) return null;
   try {
     const buf = Buffer.alloc(Math.max(0, length));
     let got = 0;
@@ -40,12 +106,6 @@ export async function headHash(path: string, length: number): Promise<string | n
   } finally {
     await fh.close();
   }
-}
-
-function isGone(err: unknown): boolean {
-  const c = (err as NodeJS.ErrnoException).code;
-  // ELOOP: the path is now a symlink. It is never followed, so the file counts as gone.
-  return c === 'ENOENT' || c === 'ENOTDIR' || c === 'ELOOP';
 }
 
 // ---------------------------------------------------------------- plan
@@ -85,6 +145,8 @@ export interface ReadOptions {
   batchBytes?: number;
   // Size of one read from disk. Default 1 MiB. Tests use small values.
   blockBytes?: number;
+  // Replaces the system calls of the open (tests: a locked file, a swapped path).
+  openDeps?: OpenDeps;
 }
 
 export interface LineBatch {
@@ -109,7 +171,9 @@ export interface LineBatch {
  *
  * Completion: the generator ends after the last batch. If the file is gone (ENOENT) or shrinks while
  * reading, the final batch carries `stopped` ('missing' or 'shrunk'); an empty batch is yielded if nothing
- * else was pending. Other I/O errors (for example EACCES) are thrown.
+ * else was pending. A path that is a symlink, or is no longer the file that was inspected, counts as missing. A file that is
+ * locked (EBUSY, EPERM, EACCES) is opened again up to OPEN_RETRIES times; if it stays locked, or on any other I/O error, the
+ * error is thrown.
  */
 export async function* readLines(
   path: string,
@@ -137,11 +201,8 @@ export async function* readLines(
     return b;
   };
 
-  let fh: FileHandle;
-  try {
-    fh = await open(path, constants.O_RDONLY | constants.O_NOFOLLOW);
-  } catch (err) {
-    if (!isGone(err)) throw err;
+  const fh = await openNoFollow(path, opts.openDeps);
+  if (fh === null) {
     yield makeBatch('missing');
     return;
   }

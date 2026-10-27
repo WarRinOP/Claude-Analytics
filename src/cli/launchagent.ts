@@ -123,12 +123,12 @@ export function resolveProjectDir(given: string | undefined, moduleDir: string):
 
 // ---------------------------------------------------------------- options
 
-interface Opts {
+export interface Opts {
   flags: Set<string>;
   values: Map<string, string>;
 }
 
-function parseOpts(args: string[], command: string, flags: string[], values: string[]): Opts | string {
+export function parseOpts(args: string[], command: string, flags: string[], values: string[]): Opts | string {
   const out: Opts = { flags: new Set(), values: new Map() };
   for (let i = 0; i < args.length; i++) {
     const a = args[i] as string;
@@ -154,7 +154,7 @@ function launchctl(args: string[]): { code: number; text: string } {
 
 const sleep = (ms: number): Promise<void> => new Promise((r) => setTimeout(r, ms));
 
-function healthOnce(port: number): Promise<boolean> {
+export function healthOnce(port: number): Promise<boolean> {
   return new Promise((done) => {
     const req = request({ host: '127.0.0.1', port, path: '/api/health', method: 'GET', timeout: 1500 }, (res) => {
       res.resume();
